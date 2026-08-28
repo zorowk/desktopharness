@@ -7,9 +7,7 @@ import io
 import asyncio
 from contextlib import redirect_stdout
 import base64
-import ast
 import json
-from pathlib import Path
 import subprocess
 import pyautogui
 import pyperclip
@@ -21,23 +19,22 @@ from .spatial_fusion import actionable_treeland_windows, build_action_targets, f
 INPUT_IMAGE_SIZE = 960
 
 
-def get_treeland_layout_tree():
-    from treeland_windowtree import WindowTreeClient
-
-    client = WindowTreeClient()
-    return client.get_full_layout_tree()
-
-
-def get_treeland_layout_tree_via_script(timeout=35):
-    script_path = Path(__file__).resolve().parents[2] / "windowtree.py"
+def get_treeland_layout_tree(timeout=35):
+    """Read Treeland's window tree from its built-in debug client."""
     result = subprocess.run(
-        [sys.executable, str(script_path)],
+        ["treeland-debug", "--tree"],
         check=True,
         capture_output=True,
         text=True,
         timeout=timeout,
     )
-    return ast.literal_eval(result.stdout)
+    output = result.stdout.strip()
+    if not output:
+        raise RuntimeError("treeland-debug --tree returned no window-tree data")
+    try:
+        return json.loads(output)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("treeland-debug --tree returned invalid JSON") from exc
 
 
 def omniparser_bbox_center(bbox, screen_width, screen_height):
@@ -162,16 +159,9 @@ def mcp_autogui_main(mcp):
             try:
                 treeland_tree = get_treeland_layout_tree()
             except Exception as exc:
-                first_error = f"{type(exc).__name__}: {exc}"
-                print(f"Treeland in-process fetch failed: {first_error}", file=sys.stderr)
-                try:
-                    treeland_tree = get_treeland_layout_tree_via_script()
-                except Exception as fallback_exc:
-                    fusion_error = (
-                        f"in-process {first_error}; "
-                        f"script fallback {type(fallback_exc).__name__}: {fallback_exc}"
-                    )
-                    treeland_tree = None
+                fusion_error = f"{type(exc).__name__}: {exc}"
+                print(f"Treeland tree fetch failed: {fusion_error}", file=sys.stderr)
+                treeland_tree = None
 
             if treeland_tree is not None:
                 try:

@@ -1788,7 +1788,7 @@ wheels = [
 [[package]]
 name = "pyautogui"
 version = "0.9.54"
-source = { git = "https://github.com/zorowk/pyautogui.git?branch=master#07a759a99365c35982e1b9632b6f5388ab8cd0a0" }
+source = { git = "https://github.com/zorowk/pyautogui.git?branch=master#e01a146c7b4b55d1462419521ffd3c4391e2f069" }
 dependencies = [
     { name = "pillow" },
     { name = "pyscreenshot" },
@@ -2513,11 +2513,6 @@ requires-dist = [
 provides-extras = ["langchain"]
 
 [[package]]
-name = "treeland-windowtree"
-version = "0.1.0"
-source = { git = "https://github.com/zorowk/treeland-windowtree.git#1cd739ff53bcf8d14c2f23a19dd7e3135cc363e6" }
-
-[[package]]
 name = "typer"
 version = "0.25.1"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple/" }
@@ -2677,11 +2672,10 @@ wheels = [
 
 [[package]]
 name = "wayland-automation"
-version = "0.2.7"
-source = { git = "https://github.com/zorowk/wayland-automation.git?branch=main#fd4d5d6707d9a1a4a9389934ded3dcf9403ccaa9" }
+version = "0.2.8"
+source = { git = "https://github.com/zorowk/wayland-automation.git?branch=main#68466ad652cd01963f0d4faad720304c09b43bed" }
 dependencies = [
     { name = "evdev" },
-    { name = "treeland-windowtree" },
 ]
 
 [[package]]

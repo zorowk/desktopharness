@@ -5,6 +5,9 @@
 This is an [MCP server](https://modelcontextprotocol.io/introduction) that analyzes the screen with [OmniParser](https://github.com/microsoft/OmniParser) and automatically operates the GUI.
 Confirmed on Windows.
 
+On Treeland, window-tree fusion uses the compositor-provided `treeland-debug --tree`
+command. Ensure `treeland-debug` is available in the MCP server's `PATH`.
+
 ## Installation
 
 1. Please do the following:
