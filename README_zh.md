@@ -39,6 +39,18 @@ export OMNI_PARSER_SERVER=host:port
 ```
 
 详细设计见 [Qwen-CUA 与 Treeland 协同架构设计](docs/qwen-cua-architecture.md)。
+手工验收和重复测试步骤见 [Qwen-CUA + Treeland 手工测试指南](docs/manual-test-guide.md)。
+
+## Codex 连接
+
+`client_env.sh` 默认以 Streamable HTTP 启动服务。使用以下命令配置 Codex：
+
+```bash
+codex mcp add treeland_autogui_mcp --url http://127.0.0.1:8000/mcp
+```
+
+只有旧 SSE 客户端才需设置 `MCP_TRANSPORT=sse`，对应地址仍为
+`http://127.0.0.1:8000/sse`。
 
 ## 安装
 

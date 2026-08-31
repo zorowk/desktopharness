@@ -41,6 +41,18 @@ feedback.
 The legacy OmniParser tools remain available for comparison tests but are not registered by default. Enable them with `GUI_OMNIPARSER_ENABLED=1` and `OMNI_PARSER_SERVER=host:port`.
 
 See [Qwen-CUA and Treeland architecture](docs/qwen-cua-architecture.md) for the design and evaluation plan.
+See the [manual test guide](docs/manual-test-guide.md) for safe acceptance and repeatability tests.
+
+## Codex connection
+
+`client_env.sh` starts the server using Streamable HTTP. Configure Codex with:
+
+```bash
+codex mcp add treeland_autogui_mcp --url http://127.0.0.1:8000/mcp
+```
+
+Set `MCP_TRANSPORT=sse` only for a legacy SSE client; its endpoint remains
+`http://127.0.0.1:8000/sse`.
 
 ## Installation
 
