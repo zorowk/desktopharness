@@ -162,6 +162,7 @@ fi
 # 启动treeland autogui mcp
 export SSE_HOST="0.0.0.0"
 export SSE_PORT=8000
+export MCP_TRANSPORT="${MCP_TRANSPORT:-streamable-http}"
 export CUA_BACKEND_MODE="${CUA_BACKEND_MODE:-embedded}"
 export CUA_MODEL_BASE_URL="${CUA_MODEL_BASE_URL:-http://127.0.0.1:8000/v1}"
 export CUA_MODEL="${CUA_MODEL:-qwen3_rl}"
