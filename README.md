@@ -10,13 +10,21 @@ command. Ensure `treeland-debug` is available in the MCP server's `PATH`.
 
 ## Qwen-CUA
 
-The default path uses a separately deployed Qwen-CUA backend. Configure it before startup:
+The default path uses the embedded Qwen-CUA service in this project; the
+`gui-mcp` backend does not need to be started. Configure the actual
+OpenAI-compatible Qwen model endpoint:
 
 ```bash
-export CUA_BACKEND_URL=http://127.0.0.1:8326
-export CUA_BACKEND_API_KEY=your-api-key       # Optional when backend auth is disabled
-export CUA_TLS_VERIFY=1                       # Explicitly set 0 only for self-signed TLS
+export CUA_BACKEND_MODE=embedded
+export CUA_MODEL_BASE_URL=http://127.0.0.1:8000/v1
+export CUA_MODEL=qwen3_rl
+export CUA_MODEL_API_KEY=your-model-api-key   # Optional when model auth is disabled
+export CUA_MODEL_TLS_VERIFY=1                 # Set 0 only for a self-signed test endpoint
 ```
+
+For comparison with the old deployment, set `CUA_BACKEND_MODE=http` and use
+`CUA_BACKEND_URL`, `CUA_BACKEND_API_KEY`, and `CUA_TLS_VERIFY`. HTTP mode is an
+optional compatibility path, not the default dependency.
 
 The Qwen tools use an explicit two-stage flow:
 
@@ -24,7 +32,11 @@ The Qwen tools use an explicit two-stage flow:
 2. Inspect `fused_actions`, then call `qwen_cua_execute(session_id, action_indexes)` to execute all or selected allowlisted actions.
 3. Call `qwen_cua_predict` again with the same session for the next step. Use a new session or call `qwen_cua_reset` for a new task.
 
-The current Qwen backend records proposed actions during prediction. A session is therefore continued only after every proposed action succeeds. Rejected, partial, or failed execution causes the next prediction to reset that session, preventing backend history from diverging from the real desktop.
+The embedded service keeps each prediction pending and commits it to Qwen
+history only after receiving the actual local execution result. Success,
+partial execution, rejection, and failure are fed back explicitly. The old HTTP
+compatibility backend still resets a session when it cannot accept execution
+feedback.
 
 The legacy OmniParser tools remain available for comparison tests but are not registered by default. Enable them with `GUI_OMNIPARSER_ENABLED=1` and `OMNI_PARSER_SERVER=host:port`.
 

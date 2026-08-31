@@ -9,13 +9,17 @@
 
 ## Qwen-CUA
 
-默认操作链路使用独立部署的 Qwen-CUA 后端。启动前配置：
+默认操作链路使用本项目内嵌的 Qwen-CUA 服务，不需要启动 `gui-mcp` 后端。只需配置实际的 OpenAI-compatible Qwen 模型端点：
 
 ```bash
-export CUA_BACKEND_URL=http://127.0.0.1:8326
-export CUA_BACKEND_API_KEY=your-api-key       # 后端未启用认证时可省略
-export CUA_TLS_VERIFY=1                       # 使用自签名证书时需显式设为 0
+export CUA_BACKEND_MODE=embedded
+export CUA_MODEL_BASE_URL=http://127.0.0.1:8000/v1
+export CUA_MODEL=qwen3_rl
+export CUA_MODEL_API_KEY=your-model-api-key   # 模型端点不校验时可省略
+export CUA_MODEL_TLS_VERIFY=1                 # 仅自签名测试端点才显式设为 0
 ```
+
+需要与旧部署对比时，可设置 `CUA_BACKEND_MODE=http`，并继续使用 `CUA_BACKEND_URL`、`CUA_BACKEND_API_KEY` 和 `CUA_TLS_VERIFY`。HTTP 模式只是兼容路径，不是默认依赖。
 
 Qwen-CUA 工具采用显式的两阶段流程：
 
@@ -25,7 +29,7 @@ Qwen-CUA 工具采用显式的两阶段流程：
 
 模型输出只允许经过 AST 解析的 `pyautogui` 白名单动作；任意 Python、动态表达式和未允许的函数都会被拒绝。执行前会重新读取 Treeland tree，如果动作坐标命中的窗口与预测时不同，也会拒绝执行。
 
-现有 Qwen 后端会在预测时记录建议动作。因此上一轮必须完整执行成功才能延续同一个 session；动作被拒绝、部分执行或执行失败后，下一次预测会自动重置该 session，避免后端历史与真实桌面状态分叉。
+内嵌服务先保存待处理动作提案，只有收到本地实际执行结果后才更新正式 Qwen 历史。成功、部分执行、拒绝和失败都会显式反馈给同一 session，避免模型历史与真实桌面状态分叉。旧 HTTP 兼容后端不支持反馈时，仍会自动重置不一致 session。
 
 OmniParser 旧接口仍保留用于对比测试，但默认不注册。需要启用时配置：
 
