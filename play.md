@@ -155,8 +155,10 @@ Task 6: 格式化输出与验证
 ### 2.5 真实模型只预测、不执行
 
 - [x] 使用无敏感内容的合成截图调用真实 `qwen3_rl` 端点，内嵌服务成功返回 `pyautogui.moveTo(500, 409)`，未执行动作。
-- [x] Wayland 下在导入 `pyautogui` 前明确使用 `grim` 截图，避免 `pyscreenshot` 自动后端选择失败导致 MCP 无法启动。
-- [ ] 在真实 Treeland 会话中重新运行 `client_env.sh`，确认 `grim` 可连接 compositor 且 MCP SSE 服务持续运行。
+- [x] `client_env.sh` 启动时只安装当前系统缺失的 apt 包，已安装的包不再重复安装或触发 `apt-get update`；AT-SPI 使用系统 Python 验证，`ydotoold` 使用非保留变量传递 UID/GID。
+- [x] 保留 `pyscreenshot` 的通用后端自动选择，不在项目内强制绑定 `grim` 或其他桌面专用后端。
+- [ ] 在真实 Treeland 会话中记录 `pyscreenshot` 各候选后端的完整失败原因，核对 Wayland socket 、会话环境和 compositor 截图权限。
+- [ ] 重新运行 `client_env.sh`，确认 `pyscreenshot` 至少有一个自动选中的后端可用，且 MCP SSE 服务持续运行。
 - [ ] 配置真实 Qwen 模型端点，在一个可恢复、无敏感数据的测试桌面上调用内嵌后端和 `qwen_cua_predict`。
 - [ ] 收集真实 Qwen 返回的动作文本，覆盖点击、双击、右击、输入、滚动、快捷键、等待和完成等类型。
 - [ ] 核对动作解析结果、原始坐标、归一化坐标、屏幕坐标和目标窗口归属。
