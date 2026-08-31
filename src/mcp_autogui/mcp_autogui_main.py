@@ -12,12 +12,6 @@ import base64
 import json
 import subprocess
 import uuid
-
-if "pyautogui" not in sys.modules:
-    from .wayland_screenshot import install_grim_backend
-
-    install_grim_backend()
-
 import pyautogui
 import pyperclip
 from mcp.server.fastmcp import Image
