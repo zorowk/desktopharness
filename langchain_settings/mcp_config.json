@@ -9,8 +9,10 @@
       "env": {
         "SSE_HOST": "0.0.0.0",
         "SSE_PORT": "8651",
-        "CUA_BACKEND_URL": "http://127.0.0.1:8326",
-        "CUA_TLS_VERIFY": "1",
+        "CUA_BACKEND_MODE": "embedded",
+        "CUA_MODEL_BASE_URL": "http://127.0.0.1:8000/v1",
+        "CUA_MODEL": "qwen3_rl",
+        "CUA_MODEL_TLS_VERIFY": "1",
         "GUI_OMNIPARSER_ENABLED": "0"
       }
     }

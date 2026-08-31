@@ -53,6 +53,9 @@ class ToolRegistrationTests(unittest.TestCase):
             return function(*args, **kwargs)
 
         class FakeBackend:
+            def __init__(self):
+                self.feedback = []
+
             def predict(self, *args, **kwargs):
                 return {
                     "agent_type": "cua",
@@ -68,6 +71,10 @@ class ToolRegistrationTests(unittest.TestCase):
 
             def health(self):
                 return {"ok": True}
+
+            def record_execution(self, session_id, **kwargs):
+                self.feedback.append({"session_id": session_id, **kwargs})
+                return {"ok": True, "committed": kwargs.get("status") == "success"}
 
         tree = {
             "currentMode": "Normal",
@@ -114,9 +121,10 @@ class ToolRegistrationTests(unittest.TestCase):
             ],
         }
         mcp = FakeMCP()
+        backend = FakeBackend()
         with patch(
             "mcp_autogui.mcp_autogui_main.QwenBackendClient",
-            return_value=FakeBackend(),
+            return_value=backend,
         ), patch(
             "mcp_autogui.mcp_autogui_main.get_treeland_layout_tree",
             return_value=tree,
@@ -128,10 +136,19 @@ class ToolRegistrationTests(unittest.TestCase):
             result = asyncio.run(
                 mcp.functions["qwen_cua_predict"]("click settings", "test-session")
             )
+            payload = json.loads(result[0])
+            target = payload["fused_actions"]["actions"][0]["target_window"]
+            self.assertEqual(target["appId"], "settings")
+            fake_pyautogui.click = lambda *args, **kwargs: None
+            execution = asyncio.run(mcp.functions["qwen_cua_execute"]("test-session"))
 
-        payload = json.loads(result[0])
-        target = payload["fused_actions"]["actions"][0]["target_window"]
-        self.assertEqual(target["appId"], "settings")
+        self.assertEqual(execution["status"], "success")
+        actual = backend.feedback[0]["execution"]
+        self.assertEqual(actual["frame_id"], payload["frame_id"])
+        self.assertEqual(
+            actual["actual_actions"][0]["coordinate"],
+            {"x": 500.0, "y": 400.0},
+        )
 
 
 if __name__ == "__main__":

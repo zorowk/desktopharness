@@ -1,5 +1,6 @@
 #coding: utf-8
 
+import atexit
 import os
 import sys
 import threading
@@ -11,6 +12,12 @@ import base64
 import json
 import subprocess
 import uuid
+
+if "pyautogui" not in sys.modules:
+    from .wayland_screenshot import install_grim_backend
+
+    install_grim_backend()
+
 import pyautogui
 import pyperclip
 from mcp.server.fastmcp import Image
@@ -429,8 +436,29 @@ def register_omniparser_tools(mcp):
 
 def mcp_autogui_main(mcp):
     qwen_backend = QwenBackendClient()
+    backend_close = getattr(qwen_backend, "close", None)
+    if callable(backend_close):
+        atexit.register(backend_close)
     qwen_sessions = {}
     qwen_sessions_lock = threading.RLock()
+
+    def record_qwen_execution(session_id, status, execution=None, reason=None):
+        recorder = getattr(qwen_backend, "record_execution", None)
+        if not callable(recorder):
+            return {"ok": False, "committed": False, "message": "feedback unsupported"}
+        try:
+            return recorder(
+                session_id,
+                status=status,
+                execution=execution,
+                reason=reason,
+            )
+        except Exception as exc:
+            return {
+                "ok": False,
+                "committed": False,
+                "message": f"{type(exc).__name__}: {exc}",
+            }
 
     def capture_qwen_frame():
         screenshot = pyautogui.screenshot().convert("RGB")
@@ -587,16 +615,35 @@ def mcp_autogui_main(mcp):
                 )
 
         if refusals:
+            backend_feedback = await asyncio.to_thread(
+                record_qwen_execution,
+                session_id,
+                "rejected",
+                {
+                    "frame_id": state["frame_id"],
+                    "selected_action_indexes": sorted(selected),
+                    "refusals": refusals,
+                },
+                "Treeland target validation rejected the proposal",
+            )
+            can_continue = bool(backend_feedback.get("ok"))
             with qwen_sessions_lock:
                 current_state = qwen_sessions.get(session_id)
                 if current_state is state:
-                    current_state["requires_reset"] = True
+                    current_state["execution_complete"] = can_continue
+                    current_state["requires_reset"] = not can_continue
             return {
                 "session_id": session_id,
                 "frame_id": state["frame_id"],
                 "status": "refused",
                 "refusals": refusals,
-                "guidance": "Reset this session, or call qwen_cua_predict again to auto-reset it.",
+                "backend_feedback": backend_feedback,
+                "session_continuable": can_continue,
+                "guidance": (
+                    "Call qwen_cua_predict again with this session; the embedded backend received the rejection."
+                    if can_continue
+                    else "Reset this session, or call qwen_cua_predict again to auto-reset it."
+                ),
             }
 
         execution_actions = deepcopy(parsed_actions)
@@ -624,17 +671,42 @@ def mcp_autogui_main(mcp):
             pyautogui,
             action_indexes=action_indexes,
         )
-        post_tree = await asyncio.to_thread(get_treeland_layout_tree)
+        post_tree = None
+        post_tree_error = None
+        try:
+            post_tree = await asyncio.to_thread(get_treeland_layout_tree)
+        except Exception as exc:
+            post_tree_error = f"{type(exc).__name__}: {exc}"
+        all_actions_selected = selected == set(range(len(parsed_actions)))
+        all_actions_succeeded = bool(execution_results) and all(
+            item.get("status") == "success" for item in execution_results
+        )
+        if all_actions_selected and all_actions_succeeded:
+            feedback_status = "success"
+        elif all_actions_succeeded:
+            feedback_status = "partial"
+        else:
+            feedback_status = "error"
+        backend_feedback = await asyncio.to_thread(
+            record_qwen_execution,
+            session_id,
+            feedback_status,
+            {
+                "frame_id": state["frame_id"],
+                "selected_action_indexes": sorted(selected),
+                "actual_actions": [execution_actions[index] for index in sorted(selected)],
+                "results": execution_results,
+                "post_tree_error": post_tree_error,
+            },
+            None if all_actions_succeeded else "One or more actions failed",
+        )
+        feedback_recorded = bool(backend_feedback.get("ok"))
         with qwen_sessions_lock:
             current_state = qwen_sessions.get(session_id)
             if current_state is state:
                 current_state["last_execution"] = execution_results
-                all_actions_selected = selected == set(range(len(parsed_actions)))
-                all_actions_succeeded = bool(execution_results) and all(
-                    item.get("status") == "success" for item in execution_results
-                )
                 current_state["execution_complete"] = (
-                    all_actions_selected and all_actions_succeeded
+                    feedback_recorded or (all_actions_selected and all_actions_succeeded)
                 )
                 current_state["requires_reset"] = not current_state["execution_complete"]
 
@@ -646,17 +718,25 @@ def mcp_autogui_main(mcp):
             "frame_id": state["frame_id"],
             "status": (
                 "success"
+                if all_actions_selected and execution_succeeded
+                else "partial"
                 if execution_succeeded
                 else "error"
             ),
             "session_continuable": bool(
-                execution_succeeded and selected == set(range(len(parsed_actions)))
+                feedback_recorded
+                or (execution_succeeded and selected == set(range(len(parsed_actions))))
             ),
             "execution_results": execution_results,
-            "post_action_windows": len(actionable_treeland_windows(post_tree)),
+            "backend_feedback": backend_feedback,
+            "post_action_windows": (
+                len(actionable_treeland_windows(post_tree)) if post_tree is not None else None
+            ),
+            "post_tree_error": post_tree_error,
             "next": (
                 "Call qwen_cua_predict with the same session_id for the next step."
-                if execution_succeeded and selected == set(range(len(parsed_actions)))
+                if feedback_recorded
+                or (execution_succeeded and selected == set(range(len(parsed_actions))))
                 else "The next prediction will reset this session because execution was partial or failed."
             ),
         }

@@ -30,8 +30,8 @@ def _env_float(name: str, default: float, minimum: float = 0.0) -> float:
         return default
 
 
-class QwenBackendClient:
-    """Small client for the existing gui-mcp Qwen-CUA backend."""
+class HttpQwenBackendClient:
+    """Optional compatibility client for a separately deployed Qwen-CUA backend."""
 
     def __init__(self) -> None:
         self.url = os.getenv("CUA_BACKEND_URL", "").strip().rstrip("/")
@@ -94,6 +94,7 @@ class QwenBackendClient:
         image_mime: str = "image/png",
         image_quality: int | None = None,
         client_step: int | None = None,
+        accessibility_tree: str | None = None,
     ) -> dict[str, Any]:
         metadata: dict[str, Any] = {
             "frontend_id": session_id,
@@ -107,6 +108,8 @@ class QwenBackendClient:
             metadata["temperature"] = self.temperature
         if client_step is not None:
             metadata["client_step"] = client_step
+        if accessibility_tree:
+            metadata["accessibility_tree"] = accessibility_tree
 
         try:
             return self._predict_binary(metadata, screenshot)
@@ -169,3 +172,83 @@ class QwenBackendClient:
 
 class _BinaryEndpointUnavailable(Exception):
     pass
+
+
+class QwenBackendClient:
+    """Select the embedded Qwen-CUA service by default.
+
+    ``CUA_BACKEND_MODE=http`` retains compatibility with the old gui-mcp HTTP
+    deployment. The default ``embedded`` mode has no runtime dependency on that
+    repository or service.
+    """
+
+    def __init__(self) -> None:
+        self.mode = os.getenv("CUA_BACKEND_MODE", "embedded").strip().lower() or "embedded"
+        if self.mode == "embedded":
+            from .qwen_cua_backend import QwenCUAService
+
+            self._delegate: Any = QwenCUAService()
+        elif self.mode == "http":
+            self._delegate = HttpQwenBackendClient()
+        else:
+            raise ValueError("CUA_BACKEND_MODE must be 'embedded' or 'http'")
+
+    def init(self, session_id: str) -> dict[str, Any]:
+        return self._delegate.init(session_id)
+
+    def reset(self, session_id: str) -> None:
+        self._delegate.reset(session_id)
+
+    def predict(
+        self,
+        instruction: str,
+        screenshot: bytes,
+        session_id: str,
+        *,
+        image_mime: str = "image/png",
+        image_quality: int | None = None,
+        client_step: int | None = None,
+        accessibility_tree: str | None = None,
+    ) -> dict[str, Any]:
+        return self._delegate.predict(
+            instruction,
+            screenshot,
+            session_id,
+            image_mime=image_mime,
+            image_quality=image_quality,
+            client_step=client_step,
+            accessibility_tree=accessibility_tree,
+        )
+
+    def record_execution(
+        self,
+        session_id: str,
+        *,
+        status: str,
+        execution: Any = None,
+        reason: str | None = None,
+    ) -> dict[str, Any]:
+        recorder = getattr(self._delegate, "record_execution", None)
+        if not callable(recorder):
+            return {
+                "ok": False,
+                "backend_mode": self.mode,
+                "committed": False,
+                "message": "HTTP compatibility backend does not support execution feedback",
+            }
+        return recorder(
+            session_id,
+            status=status,
+            execution=execution,
+            reason=reason,
+        )
+
+    def health(self) -> dict[str, Any]:
+        health = self._delegate.health()
+        health.setdefault("backend_mode", self.mode)
+        return health
+
+    def close(self) -> None:
+        closer = getattr(self._delegate, "close", None)
+        if callable(closer):
+            closer()

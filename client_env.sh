@@ -1,5 +1,15 @@
 #!/usr/bin/env bash
 
+# 加载本机私密配置；文件不存在时继续使用脚本原有默认值。
+CLIENT_ENV_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CLIENT_ENV_FILE="${CLIENT_ENV_FILE:-${CLIENT_ENV_DIR}/.env.local}"
+if [ -f "${CLIENT_ENV_FILE}" ]; then
+    set -a
+    # shellcheck disable=SC1090
+    source "${CLIENT_ENV_FILE}"
+    set +a
+fi
+
 #解决部分设备没有~/.Xauthority文件的问题
 if [ ! -f ~/.Xauthority ]; then
     touch ~/.Xauthority
@@ -27,7 +37,7 @@ sudo apt-get install -y libcairo2-dev libgirepository-2.0-dev
 sudo apt-get install -y scdoc
 sudo apt-get install -y wlrctl
 
-PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_DIR="${PROJECT_ROOT}/.venv"
 TMP_BASE="$(mktemp -d /tmp/treeland-autotests-deps.XXXXXX)"
 
@@ -132,10 +142,12 @@ fi
 # 启动treeland autogui mcp
 export SSE_HOST="0.0.0.0"
 export SSE_PORT=8000
-export CUA_BACKEND_URL="${CUA_BACKEND_URL:-http://127.0.0.1:8326}"
-export CUA_TLS_VERIFY="${CUA_TLS_VERIFY:-1}"
+export CUA_BACKEND_MODE="${CUA_BACKEND_MODE:-embedded}"
+export CUA_MODEL_BASE_URL="${CUA_MODEL_BASE_URL:-http://127.0.0.1:8000/v1}"
+export CUA_MODEL="${CUA_MODEL:-qwen3_rl}"
+export CUA_MODEL_TLS_VERIFY="${CUA_MODEL_TLS_VERIFY:-1}"
 export GUI_OMNIPARSER_ENABLED="${GUI_OMNIPARSER_ENABLED:-0}"
-uv run treeland-autogui-mcp
+uv run treeland-autogui-mcp || exit $?
 
 cat <<EOF
 
