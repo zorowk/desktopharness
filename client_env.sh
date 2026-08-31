@@ -19,23 +19,43 @@ fi
 #关闭签名限制
 #sudo dbus-send --print-reply --type=method_call --system --dest=com.deepin.daemon.ACL /org/deepin/security/hierarchical/Control org.deepin.security.hierarchical.Control.SetMode boolean:false
 
-# install base package
-sudo apt-get update
-sudo apt-get install -y python3.12-venv
-sudo apt-get install -y wtype
-sudo apt-get install -y wayland-utils
-sudo apt-get install -y xdotool
-sudo apt-get install -y grim
-sudo apt-get install -y wl-clipboard
-sudo apt-get install -y curl
-sudo apt-get install -y build-essential pkg-config
-sudo apt-get install -y cmake ninja-build
-sudo apt-get install -y libinput-tools
-sudo apt-get install -y gir1.2-atspi-2.0
-sudo apt-get install -y python3-dev build-essential
-sudo apt-get install -y libcairo2-dev libgirepository-2.0-dev
-sudo apt-get install -y scdoc
-sudo apt-get install -y wlrctl
+# install missing base packages
+apt_packages=(
+    python3.12-venv
+    wtype
+    wayland-utils
+    xdotool
+    grim
+    wl-clipboard
+    curl
+    build-essential
+    pkg-config
+    cmake
+    ninja-build
+    libinput-tools
+    gir1.2-atspi-2.0
+    python3-pyatspi
+    python3-gi
+    python3-dev
+    libcairo2-dev
+    libgirepository-2.0-dev
+    scdoc
+    wlrctl
+)
+missing_apt_packages=()
+for package in "${apt_packages[@]}"; do
+    if ! dpkg-query -W -f='${Status}' "${package}" 2>/dev/null | grep -q '^install ok installed$'; then
+        missing_apt_packages+=("${package}")
+    fi
+done
+
+if ((${#missing_apt_packages[@]} > 0)); then
+    echo "Installing missing apt packages: ${missing_apt_packages[*]}"
+    sudo apt-get update
+    sudo apt-get install -y "${missing_apt_packages[@]}"
+else
+    echo "All required apt packages are already installed; skipping apt."
+fi
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_DIR="${PROJECT_ROOT}/.venv"
@@ -88,7 +108,7 @@ fi
 echo "[3/7] Install python dependencies via uv"
 uv sync
 
-if python - <<'PY'
+if /usr/bin/python3 - <<'PY'
 import pyatspi
 print(pyatspi.__name__)
 PY
@@ -117,8 +137,8 @@ fi
 
 echo "Wayland environment variables have been set." >&2
 
-UID="$(id -u)"
-GID="$(id -g)"
+USER_UID="$(id -u)"
+USER_GID="$(id -g)"
 touch_flag=()
 if command -v libinput >/dev/null 2>&1; then
     echo "Checking touchscreen via libinput..." >&2
@@ -133,8 +153,8 @@ else
 fi
 
 if ! pgrep -x ydotoold >/dev/null 2>&1; then
-    echo "Starting ydotoold (UID=${UID}, GID=${GID})..." >&2
-    sudo ydotoold "${touch_flag[@]}" -p "${XDG_RUNTIME_DIR}/.ydotool_socket" -o "${UID}:${GID}" >/dev/null 2>&1 &
+    echo "Starting ydotoold (UID=${USER_UID}, GID=${USER_GID})..." >&2
+    sudo ydotoold "${touch_flag[@]}" -p "${XDG_RUNTIME_DIR}/.ydotool_socket" -o "${USER_UID}:${USER_GID}" >/dev/null 2>&1 &
 else
     echo "ydotoold already running; skipping start." >&2
 fi
