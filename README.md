@@ -8,6 +8,28 @@ Confirmed on Windows.
 On Treeland, window-tree fusion uses the compositor-provided `treeland-debug --tree`
 command. Ensure `treeland-debug` is available in the MCP server's `PATH`.
 
+## Qwen-CUA
+
+The default path uses a separately deployed Qwen-CUA backend. Configure it before startup:
+
+```bash
+export CUA_BACKEND_URL=http://127.0.0.1:8326
+export CUA_BACKEND_API_KEY=your-api-key       # Optional when backend auth is disabled
+export CUA_TLS_VERIFY=1                       # Explicitly set 0 only for self-signed TLS
+```
+
+The Qwen tools use an explicit two-stage flow:
+
+1. Call `qwen_cua_predict(instruction)` to receive a `session_id`, proposed Qwen actions, and deterministic Treeland window context. Prediction does not execute actions.
+2. Inspect `fused_actions`, then call `qwen_cua_execute(session_id, action_indexes)` to execute all or selected allowlisted actions.
+3. Call `qwen_cua_predict` again with the same session for the next step. Use a new session or call `qwen_cua_reset` for a new task.
+
+The current Qwen backend records proposed actions during prediction. A session is therefore continued only after every proposed action succeeds. Rejected, partial, or failed execution causes the next prediction to reset that session, preventing backend history from diverging from the real desktop.
+
+The legacy OmniParser tools remain available for comparison tests but are not registered by default. Enable them with `GUI_OMNIPARSER_ENABLED=1` and `OMNI_PARSER_SERVER=host:port`.
+
+See [Qwen-CUA and Treeland architecture](docs/qwen-cua-architecture.md) for the design and evaluation plan.
+
 ## Installation
 
 1. Please do the following:

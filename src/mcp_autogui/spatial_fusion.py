@@ -199,6 +199,11 @@ def actionable_treeland_windows(tree: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def screen_size_from_treeland(tree: dict[str, Any]) -> tuple[float, float]:
+    bounds = desktop_bounds_from_treeland(tree)
+    return bounds["width"], bounds["height"]
+
+
+def desktop_bounds_from_treeland(tree: dict[str, Any]) -> dict[str, float]:
     background_rects = []
     for layer in tree.get("layers", []):
         if layer.get("name") != "background":
@@ -209,13 +214,181 @@ def screen_size_from_treeland(tree: dict[str, Any]) -> tuple[float, float]:
                 if _has_area(rect):
                     background_rects.append(rect)
                     break
-    if background_rects:
-        min_x = min(_number(rect.get("x")) for rect in background_rects)
-        min_y = min(_number(rect.get("y")) for rect in background_rects)
-        max_x = max(_number(rect.get("x")) + _number(rect.get("width")) for rect in background_rects)
-        max_y = max(_number(rect.get("y")) + _number(rect.get("height")) for rect in background_rects)
-        return max_x - min_x, max_y - min_y
-    raise ValueError("Unable to determine screen size from Treeland background layer")
+    source_rects = background_rects
+    if not source_rects:
+        source_rects = [
+            window.get("geometry") or {}
+            for window in flatten_treeland_windows(tree)
+            if _has_area(window.get("geometry") or {})
+        ]
+    if not source_rects:
+        raise ValueError("Unable to determine desktop bounds from Treeland tree")
+    min_x = min(_number(rect.get("x")) for rect in source_rects)
+    min_y = min(_number(rect.get("y")) for rect in source_rects)
+    max_x = max(_number(rect.get("x")) + _number(rect.get("width")) for rect in source_rects)
+    max_y = max(_number(rect.get("y")) + _number(rect.get("height")) for rect in source_rects)
+    return {
+        "x": min_x,
+        "y": min_y,
+        "width": max_x - min_x,
+        "height": max_y - min_y,
+    }
+
+
+def fuse_qwen_actions_with_treeland(
+    actions: list[dict[str, Any]],
+    treeland_tree: dict[str, Any],
+    screenshot_size: tuple[int, int],
+) -> dict[str, Any]:
+    """Attach deterministic Treeland window context to parsed Qwen actions."""
+    screenshot_width, screenshot_height = screenshot_size
+    if screenshot_width <= 0 or screenshot_height <= 0:
+        raise ValueError("Screenshot size must be positive")
+
+    tree = deepcopy(treeland_tree)
+    desktop_bounds = desktop_bounds_from_treeland(tree)
+    windows = flatten_treeland_windows(tree)
+    active_window = next((window for window in windows if window.get("active") is True), None)
+    fused_actions = []
+
+    for action_index, action in enumerate(actions):
+        fused_action = deepcopy(action)
+        fused_action["action_index"] = action_index
+        screenshot_coordinate = action.get("coordinate")
+        if _valid_point(screenshot_coordinate):
+            desktop_coordinate = _screenshot_to_desktop_point(
+                screenshot_coordinate,
+                screenshot_width,
+                screenshot_height,
+                desktop_bounds,
+            )
+            matching_windows = [
+                (window_id, window)
+                for window_id, window in enumerate(windows)
+                if _point_in_geometry(desktop_coordinate, window.get("geometry") or {})
+            ]
+            target = (
+                _qwen_window_target(matching_windows[0][0], matching_windows[0][1], desktop_coordinate)
+                if matching_windows
+                else None
+            )
+            fused_action["desktop_coordinate"] = desktop_coordinate
+            fused_action["target_window"] = target
+            fused_action["validation"] = {
+                "inside_desktop": _point_in_desktop(desktop_coordinate, desktop_bounds),
+                "target_window_found": target is not None,
+                "topmost_at_coordinate": target is not None,
+                "matching_window_count": len(matching_windows),
+            }
+            if len(matching_windows) > 1:
+                fused_action["window_candidates_front_to_back"] = [
+                    _qwen_window_summary(window_id, window)
+                    for window_id, window in matching_windows
+                ]
+        else:
+            fused_action["desktop_coordinate"] = None
+            fused_action["target_window"] = (
+                _qwen_window_target_from_active(windows, active_window)
+                if active_window is not None
+                else None
+            )
+            fused_action["validation"] = {
+                "inside_desktop": None,
+                "target_window_found": active_window is not None,
+                "topmost_at_coordinate": None,
+                "matching_window_count": None,
+                "target_source": "active_window" if active_window is not None else None,
+            }
+        fused_actions.append(fused_action)
+
+    return {
+        "currentMode": tree.get("currentMode"),
+        "screenshot_size": {"width": screenshot_width, "height": screenshot_height},
+        "desktop_bounds": desktop_bounds,
+        "window_count": len(windows),
+        "actions": fused_actions,
+    }
+
+
+def _qwen_window_target_from_active(
+    windows: list[dict[str, Any]],
+    active_window: dict[str, Any],
+) -> dict[str, Any]:
+    return _qwen_window_summary(windows.index(active_window), active_window)
+
+
+def _qwen_window_target(
+    window_id: int,
+    window: dict[str, Any],
+    desktop_coordinate: dict[str, float],
+) -> dict[str, Any]:
+    target = _qwen_window_summary(window_id, window)
+    geometry = window.get("geometry") or {}
+    target["window_relative_coordinate"] = {
+        "x": desktop_coordinate["x"] - _number(geometry.get("x")),
+        "y": desktop_coordinate["y"] - _number(geometry.get("y")),
+    }
+    return target
+
+
+def _qwen_window_summary(window_id: int, window: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "window_id": window_id,
+        "appId": window.get("appId"),
+        "title": window.get("title"),
+        "output": window.get("output"),
+        "container": window.get("container"),
+        "workspace": window.get("workspace"),
+        "geometry": deepcopy(window.get("geometry") or {}),
+        "active": window.get("active"),
+        "visible": window.get("visible"),
+        "layer": window.get("layer"),
+        "z": window.get("z"),
+    }
+
+
+def _screenshot_to_desktop_point(
+    coordinate: dict[str, Any],
+    screenshot_width: int,
+    screenshot_height: int,
+    desktop_bounds: dict[str, float],
+) -> dict[str, float]:
+    return {
+        "x": desktop_bounds["x"]
+        + _number(coordinate.get("x")) * desktop_bounds["width"] / screenshot_width,
+        "y": desktop_bounds["y"]
+        + _number(coordinate.get("y")) * desktop_bounds["height"] / screenshot_height,
+    }
+
+
+def _point_in_geometry(point: dict[str, float], geometry: dict[str, Any]) -> bool:
+    if not _has_area(geometry):
+        return False
+    x = point["x"]
+    y = point["y"]
+    left = _number(geometry.get("x"))
+    top = _number(geometry.get("y"))
+    return (
+        left <= x < left + _number(geometry.get("width"))
+        and top <= y < top + _number(geometry.get("height"))
+    )
+
+
+def _point_in_desktop(point: dict[str, float], bounds: dict[str, float]) -> bool:
+    return (
+        bounds["x"] <= point["x"] < bounds["x"] + bounds["width"]
+        and bounds["y"] <= point["y"] < bounds["y"] + bounds["height"]
+    )
+
+
+def _valid_point(point: Any) -> bool:
+    if not isinstance(point, dict):
+        return False
+    for key in ("x", "y"):
+        value = point.get(key)
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            return False
+    return True
 
 
 def flatten_treeland_windows(

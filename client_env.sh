@@ -132,8 +132,9 @@ fi
 # 启动treeland autogui mcp
 export SSE_HOST="0.0.0.0"
 export SSE_PORT=8000
-export OMNI_PARSER_SERVER="100.86.114.106:8000"
-export OMNIPARSER_MCP_DEBUG=1
+export CUA_BACKEND_URL="${CUA_BACKEND_URL:-http://127.0.0.1:8326}"
+export CUA_TLS_VERIFY="${CUA_TLS_VERIFY:-1}"
+export GUI_OMNIPARSER_ENABLED="${GUI_OMNIPARSER_ENABLED:-0}"
 uv run treeland-autogui-mcp
 
 cat <<EOF

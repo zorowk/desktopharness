@@ -1,15 +1,17 @@
 {
   "mcpServers": {
-    "omniparser_autogui_mcp": {
+    "treeland_autogui_mcp": {
       "command": "uv",
       "args": [
         "run",
-        "omniparser-autogui-mcp"
+        "treeland-autogui-mcp"
       ],
       "env": {
         "SSE_HOST": "0.0.0.0",
         "SSE_PORT": "8651",
-        "OMNI_PARSER_SERVER": "100.86.114.106:8000"
+        "CUA_BACKEND_URL": "http://127.0.0.1:8326",
+        "CUA_TLS_VERIFY": "1",
+        "GUI_OMNIPARSER_ENABLED": "0"
       }
     }
   }

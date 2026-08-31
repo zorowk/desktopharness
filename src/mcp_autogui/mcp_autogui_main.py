@@ -5,16 +5,25 @@ import sys
 import threading
 import io
 import asyncio
+from copy import deepcopy
 from contextlib import redirect_stdout
 import base64
 import json
 import subprocess
+import uuid
 import pyautogui
 import pyperclip
 from mcp.server.fastmcp import Image
 import PIL
 import requests
-from .spatial_fusion import actionable_treeland_windows, build_action_targets, fuse_omniparser_with_treeland
+from .qwen_actions import execute_parsed_actions, parse_qwen_actions, set_absolute_coordinate
+from .qwen_backend import QwenBackendClient
+from .spatial_fusion import (
+    actionable_treeland_windows,
+    build_action_targets,
+    fuse_omniparser_with_treeland,
+    fuse_qwen_actions_with_treeland,
+)
 
 INPUT_IMAGE_SIZE = 960
 
@@ -87,7 +96,14 @@ def window_region_center(window, region):
 
     return None
 
-def mcp_autogui_main(mcp):
+def _env_enabled(name, default=False):
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def register_omniparser_tools(mcp):
     omniparser_thread = None
     result_image = None
     detail = None
@@ -97,7 +113,9 @@ def mcp_autogui_main(mcp):
     current_mouse_x, current_mouse_y = pyautogui.position()
 
     if 'OMNI_PARSER_SERVER' not in os.environ:
-        raise RuntimeError('OMNI_PARSER_SERVER environment variable is required.')
+        raise RuntimeError(
+            'OMNI_PARSER_SERVER is required when GUI_OMNIPARSER_ENABLED is enabled.'
+        )
 
     @mcp.tool()
     async def omniparser_details_on_screen() -> list:
@@ -407,3 +425,265 @@ def mcp_autogui_main(mcp):
         time: Waiting time (seconds).
         """
         await asyncio.sleep(time)
+
+
+def mcp_autogui_main(mcp):
+    qwen_backend = QwenBackendClient()
+    qwen_sessions = {}
+    qwen_sessions_lock = threading.RLock()
+
+    def capture_qwen_frame():
+        screenshot = pyautogui.screenshot().convert("RGB")
+        screenshot_buffer = io.BytesIO()
+        screenshot.save(screenshot_buffer, format="PNG")
+        tree = get_treeland_layout_tree()
+        return screenshot_buffer.getvalue(), screenshot.size, tree
+
+    @mcp.tool()
+    async def qwen_cua_predict(
+        instruction: str,
+        session_id: str = '',
+        reset: bool = False,
+    ) -> list:
+        """Ask Qwen-CUA for one GUI step and fuse its coordinates with Treeland.
+
+    This tool does not execute the returned actions. Inspect the deterministic
+    Treeland target and validation data, then call qwen_cua_execute.
+
+    Args:
+        instruction: The bounded GUI task for the current Qwen-CUA session.
+        session_id: Reuse the returned ID for subsequent steps of the same task.
+        reset: Reset the backend session before this prediction.
+        """
+        normalized_instruction = instruction.strip()
+        if not normalized_instruction:
+            raise ValueError("instruction must not be empty")
+        resolved_session_id = session_id.strip() or f"treeland-autoui-{uuid.uuid4().hex}"
+
+        with qwen_sessions_lock:
+            existing_state = qwen_sessions.get(resolved_session_id)
+        if existing_state and not existing_state.get("execution_complete"):
+            if not existing_state.get("requires_reset"):
+                raise RuntimeError(
+                    "The previous Qwen-CUA prediction is still pending; execute it or reset the session"
+                )
+        instruction_changed = bool(
+            existing_state
+            and existing_state.get("instruction") != normalized_instruction
+        )
+        state_requires_reset = bool(existing_state and existing_state.get("requires_reset"))
+        if reset or instruction_changed or state_requires_reset:
+            await asyncio.to_thread(qwen_backend.reset, resolved_session_id)
+            with qwen_sessions_lock:
+                qwen_sessions.pop(resolved_session_id, None)
+
+        screenshot_bytes, screenshot_size, treeland_tree = await asyncio.to_thread(
+            capture_qwen_frame
+        )
+        with qwen_sessions_lock:
+            previous = qwen_sessions.get(resolved_session_id) or {}
+            client_step = int(previous.get("step", 0)) + 1
+
+        backend_result = await asyncio.to_thread(
+            qwen_backend.predict,
+            normalized_instruction,
+            screenshot_bytes,
+            resolved_session_id,
+            image_mime="image/png",
+            client_step=client_step,
+        )
+        parsed_actions = parse_qwen_actions(backend_result.get("actions", []))
+        fused = fuse_qwen_actions_with_treeland(
+            parsed_actions,
+            treeland_tree,
+            screenshot_size,
+        )
+        frame_id = f"frame-{uuid.uuid4().hex}"
+        with qwen_sessions_lock:
+            qwen_sessions[resolved_session_id] = {
+                "session_id": resolved_session_id,
+                "instruction": normalized_instruction,
+                "step": client_step,
+                "frame_id": frame_id,
+                "screenshot_size": screenshot_size,
+                "parsed_actions": parsed_actions,
+                "fused": fused,
+                "execution_complete": False,
+                "requires_reset": False,
+            }
+
+        response = {
+            "session_id": resolved_session_id,
+            "frame_id": frame_id,
+            "step": client_step,
+            "instruction": normalized_instruction,
+            "agent_type": backend_result.get("agent_type"),
+            "observation": backend_result.get("observation_text", ""),
+            "action_text": backend_result.get("action_text", ""),
+            "assistant_output": backend_result.get("assistant_output", ""),
+            "fused_actions": fused,
+            "telemetry": backend_result.get("telemetry", {}),
+        }
+        return [
+            json.dumps(response, ensure_ascii=False, indent=2),
+            Image(data=screenshot_bytes, format="png"),
+        ]
+
+    @mcp.tool()
+    async def qwen_cua_execute(
+        session_id: str,
+        action_indexes: list[int] | None = None,
+    ) -> dict:
+        """Execute selected actions from the latest Qwen-CUA prediction.
+
+    Actions are parsed through a strict allowlist. Coordinate actions are
+    refused when the latest Treeland tree no longer resolves to the same target
+    window as the prediction frame.
+
+    Args:
+        session_id: ID returned by qwen_cua_predict.
+        action_indexes: Fused action indexes to execute; omit to execute all.
+        """
+        with qwen_sessions_lock:
+            state = qwen_sessions.get(session_id)
+        if state is None:
+            raise ValueError("No pending Qwen-CUA prediction for this session_id")
+
+        parsed_actions = state["parsed_actions"]
+        if action_indexes is not None:
+            if any(not isinstance(index, int) or isinstance(index, bool) for index in action_indexes):
+                raise ValueError("action_indexes must contain integers")
+            if any(index < 0 or index >= len(parsed_actions) for index in action_indexes):
+                raise ValueError("action_indexes contains an out-of-range index")
+
+        latest_tree = await asyncio.to_thread(get_treeland_layout_tree)
+        latest_fused = fuse_qwen_actions_with_treeland(
+            parsed_actions,
+            latest_tree,
+            state["screenshot_size"],
+        )
+        selected = set(action_indexes) if action_indexes is not None else set(range(len(parsed_actions)))
+        refusals = []
+        original_fused_actions = state["fused"]["actions"]
+        latest_fused_actions = latest_fused["actions"]
+        for index in sorted(selected):
+            action = parsed_actions[index]
+            if action.get("coordinate") is None:
+                continue
+            original_target = original_fused_actions[index].get("target_window")
+            latest_target = latest_fused_actions[index].get("target_window")
+            if original_target is None or latest_target is None:
+                refusals.append({"action_index": index, "reason": "target_window_missing"})
+                continue
+            identity_keys = ("appId", "title", "container", "workspace")
+            if any(original_target.get(key) != latest_target.get(key) for key in identity_keys):
+                refusals.append(
+                    {
+                        "action_index": index,
+                        "reason": "target_window_changed",
+                        "predicted_target": original_target,
+                        "current_target": latest_target,
+                    }
+                )
+
+        if refusals:
+            with qwen_sessions_lock:
+                current_state = qwen_sessions.get(session_id)
+                if current_state is state:
+                    current_state["requires_reset"] = True
+            return {
+                "session_id": session_id,
+                "frame_id": state["frame_id"],
+                "status": "refused",
+                "refusals": refusals,
+                "guidance": "Reset this session, or call qwen_cua_predict again to auto-reset it.",
+            }
+
+        execution_actions = deepcopy(parsed_actions)
+        for index in sorted(selected):
+            original = original_fused_actions[index]
+            latest = latest_fused_actions[index]
+            if original.get("desktop_coordinate") is None:
+                continue
+            original_target = original.get("target_window") or {}
+            latest_target = latest.get("target_window") or {}
+            relative = original_target.get("window_relative_coordinate")
+            latest_geometry = latest_target.get("geometry") or {}
+            if isinstance(relative, dict) and latest_geometry:
+                execution_coordinate = {
+                    "x": float(latest_geometry.get("x") or 0) + float(relative.get("x") or 0),
+                    "y": float(latest_geometry.get("y") or 0) + float(relative.get("y") or 0),
+                }
+            else:
+                execution_coordinate = latest["desktop_coordinate"]
+            set_absolute_coordinate(execution_actions[index], execution_coordinate)
+
+        execution_results = await asyncio.to_thread(
+            execute_parsed_actions,
+            execution_actions,
+            pyautogui,
+            action_indexes=action_indexes,
+        )
+        post_tree = await asyncio.to_thread(get_treeland_layout_tree)
+        with qwen_sessions_lock:
+            current_state = qwen_sessions.get(session_id)
+            if current_state is state:
+                current_state["last_execution"] = execution_results
+                all_actions_selected = selected == set(range(len(parsed_actions)))
+                all_actions_succeeded = bool(execution_results) and all(
+                    item.get("status") == "success" for item in execution_results
+                )
+                current_state["execution_complete"] = (
+                    all_actions_selected and all_actions_succeeded
+                )
+                current_state["requires_reset"] = not current_state["execution_complete"]
+
+        execution_succeeded = bool(execution_results) and all(
+            item.get("status") == "success" for item in execution_results
+        )
+        return {
+            "session_id": session_id,
+            "frame_id": state["frame_id"],
+            "status": (
+                "success"
+                if execution_succeeded
+                else "error"
+            ),
+            "session_continuable": bool(
+                execution_succeeded and selected == set(range(len(parsed_actions)))
+            ),
+            "execution_results": execution_results,
+            "post_action_windows": len(actionable_treeland_windows(post_tree)),
+            "next": (
+                "Call qwen_cua_predict with the same session_id for the next step."
+                if execution_succeeded and selected == set(range(len(parsed_actions)))
+                else "The next prediction will reset this session because execution was partial or failed."
+            ),
+        }
+
+    @mcp.tool()
+    async def qwen_cua_reset(session_id: str) -> bool:
+        """Reset a Qwen-CUA backend session and discard its pending local frame."""
+        await asyncio.to_thread(qwen_backend.reset, session_id)
+        with qwen_sessions_lock:
+            qwen_sessions.pop(session_id, None)
+        return True
+
+    @mcp.tool()
+    async def qwen_cua_status() -> dict:
+        """Check Qwen-CUA backend connectivity and local pending sessions."""
+        health = await asyncio.to_thread(qwen_backend.health)
+        with qwen_sessions_lock:
+            sessions = [
+                {
+                    "session_id": value["session_id"],
+                    "instruction": value["instruction"],
+                    "step": value["step"],
+                    "frame_id": value["frame_id"],
+                }
+                for value in qwen_sessions.values()
+            ]
+        return {"backend": health, "pending_sessions": sessions}
+
+    if _env_enabled("GUI_OMNIPARSER_ENABLED"):
+        register_omniparser_tools(mcp)
