@@ -25,8 +25,10 @@ from .spatial_fusion import (
     build_action_targets,
     desktop_bounds_from_treeland,
     desktop_to_screenshot_point,
+    flatten_treeland_windows,
     fuse_omniparser_with_treeland,
     fuse_qwen_actions_with_treeland,
+    screenshot_to_qwen_normalized,
 )
 
 INPUT_IMAGE_SIZE = 960
@@ -64,10 +66,9 @@ def _qwen_precision_constraint(
     x, y = (float(value) for value in expected_screenshot_coordinate)
     if not (0 <= x < width and 0 <= y < height):
         raise ValueError("expected_screenshot_coordinate is outside the current screenshot")
-    normalized = {
-        "x": round(x * 999 / (width - 1)),
-        "y": round(y * 999 / (height - 1)),
-    }
+    normalized = screenshot_to_qwen_normalized(
+        {"x": x, "y": y}, width, height
+    )
     return {
         "expected_action": action,
         "expected_screenshot_coordinate": {"x": x, "y": y},
@@ -176,6 +177,27 @@ def window_region_center(window, region):
     if region == "center":
         return int(win_x + win_width / 2), int(win_y + win_height / 2)
 
+    return None
+
+
+def _active_window_summary(tree):
+    """Return a compact identity summary of the active window in a tree."""
+    for window in actionable_treeland_windows(tree):
+        if window.get("active") is True:
+            return {
+                "appId": window.get("appId"),
+                "title": window.get("title"),
+                "container": window.get("container"),
+                "workspace": window.get("workspace"),
+            }
+    return None
+
+
+def _find_window_by_identity(tree, identity):
+    """Find a window matching the given identity keys (appId/title/container/workspace)."""
+    for window in flatten_treeland_windows(tree):
+        if all(window.get(key) == value for key, value in identity.items()):
+            return window
     return None
 
 def _env_enabled(name, default=False):
@@ -860,6 +882,50 @@ def mcp_autogui_main(mcp):
         session_continuable = (
             feedback_recorded and all_actions_selected and all_actions_succeeded
         )
+        active_before = _active_window_summary(latest_tree)
+        active_after = _active_window_summary(post_tree) if post_tree is not None else None
+        windows_before = len(actionable_treeland_windows(latest_tree))
+        windows_after = (
+            len(actionable_treeland_windows(post_tree)) if post_tree is not None else None
+        )
+        target_before = None
+        target_after = None
+        for index in sorted(selected):
+            action = parsed_actions[index]
+            if action.get("coordinate") is None:
+                continue
+            original_target = original_fused_actions[index].get("target_window")
+            if original_target:
+                identity = {
+                    key: original_target.get(key)
+                    for key in ("appId", "title", "container", "workspace")
+                }
+                matched = _find_window_by_identity(latest_tree, identity)
+                if matched:
+                    target_before = deepcopy(matched.get("geometry"))
+                matched_after = (
+                    _find_window_by_identity(post_tree, identity)
+                    if post_tree is not None
+                    else None
+                )
+                if matched_after:
+                    target_after = deepcopy(matched_after.get("geometry"))
+            break
+        post_validation = {
+            "active_window_before": active_before,
+            "active_window_after": active_after,
+            "active_window_changed": (active_before or {}).get("title")
+            != (active_after or {}).get("title"),
+            "actionable_windows_before": windows_before,
+            "actionable_windows_after": windows_after,
+            "target_geometry_before": target_before,
+            "target_geometry_after": target_after,
+            "target_moved": bool(
+                target_before is not None
+                and target_after is not None
+                and target_before != target_after
+            ),
+        }
         with qwen_sessions_lock:
             current_state = qwen_sessions.get(session_id)
             if current_state is state:
@@ -890,6 +956,7 @@ def mcp_autogui_main(mcp):
                 len(actionable_treeland_windows(post_tree)) if post_tree is not None else None
             ),
             "post_tree_error": post_tree_error,
+            "post_validation": post_validation,
             "stage_timings_ms": {
                 "tree_ms": round((stage_t1 - stage_t0) * 1000, 2),
                 "refusion_ms": round((stage_t2 - stage_t1) * 1000, 2),

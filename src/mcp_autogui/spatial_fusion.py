@@ -1,4 +1,20 @@
-#coding: utf-8
+"""Coordinate spaces used across the perception/control chain.
+
+1. Qwen normalized: 0..999 integer grid on each axis. The model returns
+   these; ``screenshot_to_qwen_normalized`` maps screenshot pixels into it
+   and ``qwen_normalized_to_screenshot`` maps back. Round-trips are lossy by
+   at most one screenshot pixel because of the integer normalization.
+2. Screenshot pixels: integer pixels of the captured PNG (e.g. 1920x1080).
+   A screenshot pixel maps to a logical desktop point via
+   ``_screenshot_to_desktop_point`` using ``desktop_bounds``.
+3. Treeland logical desktop: float coordinates spanning ``desktop_bounds``
+   (origin x/y + width/height), including all visible layers (background,
+   workspace, dock). ``desktop_to_screenshot_point`` maps logical points
+   back to screenshot pixels for input injection.
+
+The Qwen normalized conversion is the single source used by the controller
+coordinate constraint; do not duplicate the formula elsewhere.
+"""
 
 from __future__ import annotations
 
@@ -7,6 +23,8 @@ from typing import Any
 
 
 Rect = dict[str, float]
+
+QWEN_NORMALIZED_MAX = 999
 
 
 def normalize_box(bbox: list[float], screen_width: float, screen_height: float) -> Rect:
@@ -313,6 +331,21 @@ def _qwen_window_target_from_active(
 ) -> dict[str, Any]:
     return _qwen_window_summary(windows.index(active_window), active_window)
 
+def _qwen_window_summary(window_id: int, window: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "window_id": window_id,
+        "appId": window.get("appId"),
+        "title": window.get("title"),
+        "output": window.get("output"),
+        "container": window.get("container"),
+        "workspace": window.get("workspace"),
+        "geometry": deepcopy(window.get("geometry") or {}),
+        "active": window.get("active"),
+        "visible": window.get("visible"),
+        "layer": window.get("layer"),
+        "z": window.get("z"),
+    }
+
 
 def _qwen_window_target(
     window_id: int,
@@ -328,19 +361,39 @@ def _qwen_window_target(
     return target
 
 
-def _qwen_window_summary(window_id: int, window: dict[str, Any]) -> dict[str, Any]:
+def screenshot_to_qwen_normalized(
+    coordinate: dict[str, Any],
+    screenshot_width: int,
+    screenshot_height: int,
+) -> dict[str, int]:
+    """Map screenshot pixels to Qwen's 0..999 normalized space."""
+    if screenshot_width <= 1 or screenshot_height <= 1:
+        raise ValueError("Screenshot size must be at least 2 pixels per axis")
     return {
-        "window_id": window_id,
-        "appId": window.get("appId"),
-        "title": window.get("title"),
-        "output": window.get("output"),
-        "container": window.get("container"),
-        "workspace": window.get("workspace"),
-        "geometry": deepcopy(window.get("geometry") or {}),
-        "active": window.get("active"),
-        "visible": window.get("visible"),
-        "layer": window.get("layer"),
-        "z": window.get("z"),
+        "x": round(
+            _number(coordinate.get("x")) * QWEN_NORMALIZED_MAX / (screenshot_width - 1)
+        ),
+        "y": round(
+            _number(coordinate.get("y")) * QWEN_NORMALIZED_MAX / (screenshot_height - 1)
+        ),
+    }
+
+
+def qwen_normalized_to_screenshot(
+    coordinate: dict[str, Any],
+    screenshot_width: int,
+    screenshot_height: int,
+) -> dict[str, float]:
+    """Map Qwen's 0..999 normalized coordinates back to screenshot pixels."""
+    if screenshot_width <= 1 or screenshot_height <= 1:
+        raise ValueError("Screenshot size must be at least 2 pixels per axis")
+    return {
+        "x": _number(coordinate.get("x"))
+        * (screenshot_width - 1)
+        / QWEN_NORMALIZED_MAX,
+        "y": _number(coordinate.get("y"))
+        * (screenshot_height - 1)
+        / QWEN_NORMALIZED_MAX,
     }
 
 
