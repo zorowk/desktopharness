@@ -18,6 +18,19 @@ class FakePyAutoGUI:
         self.calls.append(("write", args, kwargs))
 
 
+class FailSafePyAutoGUI(FakePyAutoGUI):
+    FAILSAFE = True
+
+    def position(self):
+        return (1919, 1079)
+
+    def size(self):
+        return (1920, 1080)
+
+    def hotkey(self, *args, **kwargs):
+        self.calls.append(("hotkey", args, kwargs))
+
+
 class QwenActionTests(unittest.TestCase):
     def test_parse_coordinate_and_terminal_actions(self):
         actions = parse_qwen_actions(
@@ -51,6 +64,17 @@ class QwenActionTests(unittest.TestCase):
 
         self.assertEqual(result[0]["status"], "success")
         self.assertEqual(fake.calls, [("click", (300.0, 400.0), {})])
+
+    def test_failsafe_corner_refuses_pyautogui_action_without_disabling_failsafe(self):
+        actions = parse_qwen_actions(["pyautogui.hotkey('super', 'd')"])
+        fake = FailSafePyAutoGUI()
+
+        result = execute_parsed_actions(actions, fake)
+
+        self.assertEqual(result[0]["status"], "error")
+        self.assertEqual(result[0]["error_code"], "cursor_in_failsafe_corner")
+        self.assertEqual(result[0]["cursor"], {"x": 1919.0, "y": 1079.0})
+        self.assertEqual(fake.calls, [])
 
 
 if __name__ == "__main__":

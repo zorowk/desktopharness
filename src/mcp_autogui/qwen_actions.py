@@ -170,6 +170,22 @@ def execute_parsed_actions(
                 function_name = str(action.get("function") or "").removeprefix("pyautogui.")
                 if function_name not in ALLOWED_PYAUTOGUI_CALLS:
                     raise ValueError(f"Action function is not allowed: {function_name}")
+                failsafe_cursor = _failsafe_corner(pyautogui_module)
+                if failsafe_cursor is not None:
+                    results.append(
+                        {
+                            "action_index": index,
+                            "status": "error",
+                            "error_code": "cursor_in_failsafe_corner",
+                            "error": (
+                                "Refused PyAutoGUI action because the cursor is at a "
+                                f"fail-safe corner: ({failsafe_cursor['x']}, "
+                                f"{failsafe_cursor['y']})"
+                            ),
+                            "cursor": failsafe_cursor,
+                        }
+                    )
+                    break
                 function = getattr(pyautogui_module, function_name)
                 result = function(*action.get("args", []), **action.get("kwargs", {}))
             results.append({"action_index": index, "status": "success", "result": result})
@@ -183,6 +199,29 @@ def execute_parsed_actions(
             )
             break
     return results
+
+
+def _failsafe_corner(pyautogui_module: Any) -> dict[str, float] | None:
+    """Return a cursor corner that would trigger PyAutoGUI's fail-safe.
+
+    Do not disable ``pyautogui.FAILSAFE`` globally.  Rejecting the pending
+    action here gives the controller a stable, machine-readable failure rather
+    than allowing PyAutoGUI to raise after validation has already passed.
+    """
+    if not bool(getattr(pyautogui_module, "FAILSAFE", False)):
+        return None
+    try:
+        cursor = pyautogui_module.position()
+        screen = pyautogui_module.size()
+        x, y = float(cursor[0]), float(cursor[1])
+        width, height = float(screen[0]), float(screen[1])
+    except Exception:
+        return None
+    if width <= 0 or height <= 0:
+        return None
+    if x in {0.0, width - 1.0} and y in {0.0, height - 1.0}:
+        return {"x": x, "y": y}
+    return None
 
 
 def set_absolute_coordinate(
