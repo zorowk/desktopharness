@@ -10,6 +10,7 @@ import asyncio
 from copy import deepcopy
 from contextlib import redirect_stdout
 import base64
+import hashlib
 import json
 import subprocess
 import uuid
@@ -193,12 +194,13 @@ def _active_window_summary(tree):
     return None
 
 
-def _find_window_by_identity(tree, identity):
-    """Find a window matching the given identity keys (appId/title/container/workspace)."""
-    for window in flatten_treeland_windows(tree):
-        if all(window.get(key) == value for key, value in identity.items()):
-            return window
-    return None
+def _matching_windows_by_identity(tree, identity):
+    """Return all windows matching a non-unique controller identity."""
+    return [
+        window
+        for window in flatten_treeland_windows(tree)
+        if all(window.get(key) == value for key, value in identity.items())
+    ]
 
 def _env_enabled(name, default=False):
     value = os.getenv(name)
@@ -673,6 +675,7 @@ def mcp_autogui_main(mcp):
                 "step": client_step,
                 "frame_id": frame_id,
                 "screenshot_size": screenshot_size,
+                "screenshot_sha256": hashlib.sha256(screenshot_bytes).hexdigest(),
                 "parsed_actions": parsed_actions,
                 "fused": fused,
                 "execution_complete": False,
@@ -845,23 +848,107 @@ def mcp_autogui_main(mcp):
             post_action_cursor = None
             post_action_cursor_error = f"{type(exc).__name__}: {exc}"
         stage_t5 = time.perf_counter()
+        post_screenshot_bytes = None
+        post_screenshot_size = None
         post_tree = None
-        post_tree_error = None
+        post_observation_error = None
         try:
-            post_tree = await asyncio.to_thread(get_treeland_layout_tree)
+            post_screenshot_bytes, post_screenshot_size, post_tree = await asyncio.to_thread(
+                capture_qwen_frame
+            )
         except Exception as exc:
-            post_tree_error = f"{type(exc).__name__}: {exc}"
+            post_observation_error = f"{type(exc).__name__}: {exc}"
         stage_t6 = time.perf_counter()
         all_actions_selected = selected == set(range(len(parsed_actions)))
         all_actions_succeeded = bool(execution_results) and all(
             item.get("status") == "success" for item in execution_results
         )
-        if all_actions_selected and all_actions_succeeded:
+        active_before = _active_window_summary(latest_tree)
+        active_after = _active_window_summary(post_tree) if post_tree is not None else None
+        windows_before = len(actionable_treeland_windows(latest_tree))
+        windows_after = (
+            len(actionable_treeland_windows(post_tree)) if post_tree is not None else None
+        )
+        target_before = None
+        target_after = None
+        target_identity_status = None
+        for index in sorted(selected):
+            action = parsed_actions[index]
+            if action.get("coordinate") is None:
+                continue
+            original_target = original_fused_actions[index].get("target_window")
+            if original_target:
+                identity = {
+                    key: original_target.get(key)
+                    for key in ("appId", "title", "container", "workspace")
+                }
+                before_matches = _matching_windows_by_identity(latest_tree, identity)
+                after_matches = (
+                    _matching_windows_by_identity(post_tree, identity)
+                    if post_tree is not None
+                    else []
+                )
+                if len(before_matches) == 1:
+                    target_before = deepcopy(before_matches[0].get("geometry"))
+                if len(after_matches) == 1:
+                    target_after = deepcopy(after_matches[0].get("geometry"))
+                target_identity_status = (
+                    "ambiguous_before" if len(before_matches) != 1 else
+                    "missing_after" if len(after_matches) == 0 else
+                    "ambiguous_after" if len(after_matches) != 1 else
+                    "verified"
+                )
+            break
+        validation_failures = []
+        if post_observation_error is not None:
+            validation_failures.append("post_observation_unavailable")
+        if target_identity_status in {"ambiguous_before", "missing_after", "ambiguous_after"}:
+            validation_failures.append(f"target_identity_{target_identity_status}")
+        post_screenshot_sha256 = (
+            hashlib.sha256(post_screenshot_bytes).hexdigest()
+            if post_screenshot_bytes is not None
+            else None
+        )
+        post_validation = {
+            "active_window_before": active_before,
+            "active_window_after": active_after,
+            "active_window_changed": (active_before or {}).get("title")
+            != (active_after or {}).get("title"),
+            "actionable_windows_before": windows_before,
+            "actionable_windows_after": windows_after,
+            "target_geometry_before": target_before,
+            "target_geometry_after": target_after,
+            "target_identity_status": target_identity_status,
+            "target_moved": bool(
+                target_before is not None
+                and target_after is not None
+                and target_before != target_after
+            ),
+            "screenshot_size": (
+                {"width": post_screenshot_size[0], "height": post_screenshot_size[1]}
+                if post_screenshot_size is not None
+                else None
+            ),
+            "screenshot_sha256": post_screenshot_sha256,
+            "screenshot_changed": (
+                post_screenshot_sha256 != state["screenshot_sha256"]
+                if post_screenshot_sha256 is not None
+                else None
+            ),
+            "observation_error": post_observation_error,
+            "validation_failures": validation_failures,
+        }
+        if all_actions_selected and all_actions_succeeded and not validation_failures:
             feedback_status = "success"
-        elif all_actions_succeeded:
+        elif all_actions_succeeded and not validation_failures:
             feedback_status = "partial"
         else:
             feedback_status = "error"
+        feedback_reason = None
+        if not all_actions_succeeded:
+            feedback_reason = "One or more actions failed"
+        elif validation_failures:
+            feedback_reason = "Post-action validation failed: " + ", ".join(validation_failures)
         backend_feedback = await asyncio.to_thread(
             record_qwen_execution,
             session_id,
@@ -873,59 +960,18 @@ def mcp_autogui_main(mcp):
                 "results": execution_results,
                 "post_action_cursor": post_action_cursor,
                 "post_action_cursor_error": post_action_cursor_error,
-                "post_tree_error": post_tree_error,
+                "post_validation": post_validation,
             },
-            None if all_actions_succeeded else "One or more actions failed",
+            feedback_reason,
         )
         stage_t7 = time.perf_counter()
         feedback_recorded = bool(backend_feedback.get("ok"))
         session_continuable = (
-            feedback_recorded and all_actions_selected and all_actions_succeeded
+            feedback_recorded
+            and all_actions_selected
+            and all_actions_succeeded
+            and not validation_failures
         )
-        active_before = _active_window_summary(latest_tree)
-        active_after = _active_window_summary(post_tree) if post_tree is not None else None
-        windows_before = len(actionable_treeland_windows(latest_tree))
-        windows_after = (
-            len(actionable_treeland_windows(post_tree)) if post_tree is not None else None
-        )
-        target_before = None
-        target_after = None
-        for index in sorted(selected):
-            action = parsed_actions[index]
-            if action.get("coordinate") is None:
-                continue
-            original_target = original_fused_actions[index].get("target_window")
-            if original_target:
-                identity = {
-                    key: original_target.get(key)
-                    for key in ("appId", "title", "container", "workspace")
-                }
-                matched = _find_window_by_identity(latest_tree, identity)
-                if matched:
-                    target_before = deepcopy(matched.get("geometry"))
-                matched_after = (
-                    _find_window_by_identity(post_tree, identity)
-                    if post_tree is not None
-                    else None
-                )
-                if matched_after:
-                    target_after = deepcopy(matched_after.get("geometry"))
-            break
-        post_validation = {
-            "active_window_before": active_before,
-            "active_window_after": active_after,
-            "active_window_changed": (active_before or {}).get("title")
-            != (active_after or {}).get("title"),
-            "actionable_windows_before": windows_before,
-            "actionable_windows_after": windows_after,
-            "target_geometry_before": target_before,
-            "target_geometry_after": target_after,
-            "target_moved": bool(
-                target_before is not None
-                and target_after is not None
-                and target_before != target_after
-            ),
-        }
         with qwen_sessions_lock:
             current_state = qwen_sessions.get(session_id)
             if current_state is state:
@@ -941,9 +987,9 @@ def mcp_autogui_main(mcp):
             "frame_id": state["frame_id"],
             "status": (
                 "success"
-                if all_actions_selected and execution_succeeded
+                if all_actions_selected and execution_succeeded and not validation_failures
                 else "partial"
-                if execution_succeeded
+                if execution_succeeded and not validation_failures
                 else "error"
             ),
             "session_continuable": session_continuable,
@@ -955,7 +1001,7 @@ def mcp_autogui_main(mcp):
             "post_action_windows": (
                 len(actionable_treeland_windows(post_tree)) if post_tree is not None else None
             ),
-            "post_tree_error": post_tree_error,
+            "post_tree_error": post_observation_error,
             "post_validation": post_validation,
             "stage_timings_ms": {
                 "tree_ms": round((stage_t1 - stage_t0) * 1000, 2),
@@ -963,7 +1009,7 @@ def mcp_autogui_main(mcp):
                 "prep_ms": round((stage_t3 - stage_t2) * 1000, 2),
                 "execute_ms": round((stage_t4 - stage_t3) * 1000, 2),
                 "cursor_ms": round((stage_t5 - stage_t4) * 1000, 2),
-                "post_tree_ms": round((stage_t6 - stage_t5) * 1000, 2),
+                "post_observation_ms": round((stage_t6 - stage_t5) * 1000, 2),
                 "feedback_ms": round((stage_t7 - stage_t6) * 1000, 2),
                 "total_ms": round((stage_t7 - stage_t0) * 1000, 2),
             },

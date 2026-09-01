@@ -213,6 +213,33 @@ class QwenTreeFusionTests(unittest.TestCase):
         self.assertEqual(target["appId"], "deepin-editor")
         self.assertTrue(target["visible"])
 
+    def test_desktop_bounds_include_top_dock_layer(self):
+        tree = {
+            "layers": [
+                {
+                    "name": "BackgroundContainer",
+                    "layer": -2,
+                    "windows": [
+                        {"geometry": {"x": 0, "y": 0, "width": 1920, "height": 1032}}
+                    ],
+                    "workspaces": [],
+                },
+                {
+                    "name": "TopContainer",
+                    "layer": 2,
+                    "windows": [
+                        {"geometry": {"x": 0, "y": 1032, "width": 1920, "height": 48}}
+                    ],
+                    "workspaces": [],
+                },
+            ]
+        }
+
+        self.assertEqual(
+            desktop_bounds_from_treeland(tree),
+            {"x": 0.0, "y": 0.0, "width": 1920.0, "height": 1080.0},
+        )
+
     def test_qwen_normalized_roundtrip_is_lossy_at_most_one_pixel(self):
         width, height = 1920, 1080
         samples = [
