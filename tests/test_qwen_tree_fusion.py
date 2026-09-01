@@ -3,6 +3,7 @@ import unittest
 from mcp_autogui.spatial_fusion import (
     desktop_bounds_from_treeland,
     desktop_to_screenshot_point,
+    flatten_treeland_windows,
     fuse_qwen_actions_with_treeland,
 )
 
@@ -130,6 +131,95 @@ class QwenTreeFusionTests(unittest.TestCase):
         )
 
         self.assertEqual(screenshot, {"x": 1566.0, "y": 100.0})
+
+    def test_hidden_workspace_window_is_not_a_fusion_target_with_container_names(self):
+        tree = {
+            "currentMode": "Normal",
+            "layers": [
+                {
+                    "name": "BackgroundContainer",
+                    "layer": -2,
+                    "windows": [
+                        {
+                            "appId": "",
+                            "title": "",
+                            "visible": True,
+                            "active": False,
+                            "z": 0,
+                            "container": "BackgroundContainer",
+                            "workspace": -1,
+                            "geometry": {"x": 0, "y": 0, "width": 1920, "height": 1080},
+                        }
+                    ],
+                    "workspaces": [],
+                },
+                {
+                    "name": "WorkspaceContainer",
+                    "layer": 0,
+                    "windows": [],
+                    "workspaces": [
+                        {
+                            "isActive": True,
+                            "windows": [
+                                {
+                                    "appId": "firefox",
+                                    "title": "Firefox hidden",
+                                    "visible": False,
+                                    "active": False,
+                                    "z": 3,
+                                    "container": "WorkspaceContainer",
+                                    "workspace": 0,
+                                    "geometry": {
+                                        "x": 0,
+                                        "y": 0,
+                                        "width": 1920,
+                                        "height": 1080,
+                                    },
+                                },
+                                {
+                                    "appId": "deepin-editor",
+                                    "title": "Editor",
+                                    "visible": True,
+                                    "active": True,
+                                    "z": 2,
+                                    "container": "WorkspaceContainer",
+                                    "workspace": 0,
+                                    "geometry": {
+                                        "x": 280,
+                                        "y": 96,
+                                        "width": 1536,
+                                        "height": 816,
+                                    },
+                                },
+                            ],
+                        }
+                    ],
+                },
+            ],
+        }
+
+        flattened = flatten_treeland_windows(tree)
+        self.assertNotIn("firefox", [window["appId"] for window in flattened])
+
+        fused = fuse_qwen_actions_with_treeland(
+            [{"type": "click", "coordinate": {"x": 960, "y": 540}}],
+            tree,
+            (1920, 1080),
+        )
+
+        target = fused["actions"][0]["target_window"]
+        self.assertEqual(target["appId"], "deepin-editor")
+        self.assertTrue(target["visible"])
+
+    def test_desktop_bounds_from_background_container_layer_name(self):
+        tree = sample_tree()
+        tree["layers"][0]["name"] = "BackgroundContainer"
+        tree["layers"][1]["name"] = "WorkspaceContainer"
+
+        bounds = desktop_bounds_from_treeland(tree)
+
+        self.assertEqual(bounds["width"], 1000.0)
+        self.assertEqual(bounds["height"], 800.0)
 
 
 if __name__ == "__main__":

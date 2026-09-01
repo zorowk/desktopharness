@@ -3,6 +3,7 @@
 import atexit
 import os
 import sys
+import time
 import threading
 import io
 import asyncio
@@ -589,9 +590,11 @@ def mcp_autogui_main(mcp):
             with qwen_sessions_lock:
                 qwen_sessions.pop(resolved_session_id, None)
 
+        stage_t0 = time.perf_counter()
         screenshot_bytes, screenshot_size, treeland_tree = await asyncio.to_thread(
             capture_qwen_frame
         )
+        stage_t1 = time.perf_counter()
         constraint = _qwen_precision_constraint(
             expected_action,
             expected_screenshot_coordinate,
@@ -601,6 +604,7 @@ def mcp_autogui_main(mcp):
         model_instruction = normalized_instruction
         if constraint is not None:
             model_instruction = f"{normalized_instruction}\n\n{_qwen_constraint_prompt(constraint)}"
+        stage_t2 = time.perf_counter()
         with qwen_sessions_lock:
             previous = qwen_sessions.get(resolved_session_id) or {}
             client_step = int(previous.get("step", 0)) + 1
@@ -614,6 +618,7 @@ def mcp_autogui_main(mcp):
             client_step=client_step,
             session_instruction=normalized_instruction,
         )
+        stage_t3 = time.perf_counter()
         try:
             parsed_actions = parse_qwen_actions(backend_result.get("actions", []))
             violation = _qwen_constraint_violation(parsed_actions, constraint)
@@ -631,11 +636,13 @@ def mcp_autogui_main(mcp):
                 f"Proposal validation rejected: {type(exc).__name__}: {exc}",
             )
             raise ValueError(f"Qwen proposal rejected by controller validation: {exc}") from exc
+        stage_t4 = time.perf_counter()
         fused = fuse_qwen_actions_with_treeland(
             parsed_actions,
             treeland_tree,
             screenshot_size,
         )
+        stage_t5 = time.perf_counter()
         frame_id = f"frame-{uuid.uuid4().hex}"
         with qwen_sessions_lock:
             qwen_sessions[resolved_session_id] = {
@@ -661,7 +668,17 @@ def mcp_autogui_main(mcp):
             "action_text": backend_result.get("action_text", ""),
             "assistant_output": backend_result.get("assistant_output", ""),
             "fused_actions": fused,
-            "telemetry": backend_result.get("telemetry", {}),
+            "telemetry": {
+                **backend_result.get("telemetry", {}),
+                "stage_timings_ms": {
+                    "frame_capture_ms": round((stage_t1 - stage_t0) * 1000, 2),
+                    "constraint_ms": round((stage_t2 - stage_t1) * 1000, 2),
+                    "model_predict_ms": round((stage_t3 - stage_t2) * 1000, 2),
+                    "parse_validate_ms": round((stage_t4 - stage_t3) * 1000, 2),
+                    "fusion_ms": round((stage_t5 - stage_t4) * 1000, 2),
+                    "total_ms": round((stage_t5 - stage_t0) * 1000, 2),
+                },
+            },
         }
         return [
             json.dumps(response, ensure_ascii=False, indent=2),
@@ -695,13 +712,16 @@ def mcp_autogui_main(mcp):
             if any(index < 0 or index >= len(parsed_actions) for index in action_indexes):
                 raise ValueError("action_indexes contains an out-of-range index")
 
+        stage_t0 = time.perf_counter()
         latest_tree = await asyncio.to_thread(get_treeland_layout_tree)
+        stage_t1 = time.perf_counter()
         latest_desktop_bounds = desktop_bounds_from_treeland(latest_tree)
         latest_fused = fuse_qwen_actions_with_treeland(
             parsed_actions,
             latest_tree,
             state["screenshot_size"],
         )
+        stage_t2 = time.perf_counter()
         selected = set(action_indexes) if action_indexes is not None else set(range(len(parsed_actions)))
         refusals = []
         original_fused_actions = state["fused"]["actions"]
@@ -750,6 +770,10 @@ def mcp_autogui_main(mcp):
                 "status": "refused",
                 "refusals": refusals,
                 "backend_feedback": backend_feedback,
+                "stage_timings_ms": {
+                    "tree_ms": round((stage_t1 - stage_t0) * 1000, 2),
+                    "refusion_ms": round((stage_t2 - stage_t1) * 1000, 2),
+                },
                 "session_continuable": can_continue,
                 "guidance": (
                     "Call qwen_cua_predict again with this session; the embedded backend received the rejection."
@@ -783,12 +807,14 @@ def mcp_autogui_main(mcp):
             )
             set_absolute_coordinate(execution_actions[index], input_coordinate)
 
+        stage_t3 = time.perf_counter()
         execution_results = await asyncio.to_thread(
             execute_parsed_actions,
             execution_actions,
             pyautogui,
             action_indexes=action_indexes,
         )
+        stage_t4 = time.perf_counter()
         try:
             cursor_x, cursor_y = await asyncio.to_thread(pyautogui.position)
             post_action_cursor = {"x": float(cursor_x), "y": float(cursor_y)}
@@ -796,12 +822,14 @@ def mcp_autogui_main(mcp):
         except Exception as exc:
             post_action_cursor = None
             post_action_cursor_error = f"{type(exc).__name__}: {exc}"
+        stage_t5 = time.perf_counter()
         post_tree = None
         post_tree_error = None
         try:
             post_tree = await asyncio.to_thread(get_treeland_layout_tree)
         except Exception as exc:
             post_tree_error = f"{type(exc).__name__}: {exc}"
+        stage_t6 = time.perf_counter()
         all_actions_selected = selected == set(range(len(parsed_actions)))
         all_actions_succeeded = bool(execution_results) and all(
             item.get("status") == "success" for item in execution_results
@@ -827,15 +855,17 @@ def mcp_autogui_main(mcp):
             },
             None if all_actions_succeeded else "One or more actions failed",
         )
+        stage_t7 = time.perf_counter()
         feedback_recorded = bool(backend_feedback.get("ok"))
+        session_continuable = (
+            feedback_recorded and all_actions_selected and all_actions_succeeded
+        )
         with qwen_sessions_lock:
             current_state = qwen_sessions.get(session_id)
             if current_state is state:
                 current_state["last_execution"] = execution_results
-                current_state["execution_complete"] = (
-                    feedback_recorded or (all_actions_selected and all_actions_succeeded)
-                )
-                current_state["requires_reset"] = not current_state["execution_complete"]
+                current_state["execution_complete"] = True
+                current_state["requires_reset"] = not session_continuable
 
         execution_succeeded = bool(execution_results) and all(
             item.get("status") == "success" for item in execution_results
@@ -850,10 +880,7 @@ def mcp_autogui_main(mcp):
                 if execution_succeeded
                 else "error"
             ),
-            "session_continuable": bool(
-                feedback_recorded
-                or (execution_succeeded and selected == set(range(len(parsed_actions))))
-            ),
+            "session_continuable": session_continuable,
             "execution_results": execution_results,
             "executed_actions": [execution_actions[index] for index in sorted(selected)],
             "post_action_cursor": post_action_cursor,
@@ -863,11 +890,20 @@ def mcp_autogui_main(mcp):
                 len(actionable_treeland_windows(post_tree)) if post_tree is not None else None
             ),
             "post_tree_error": post_tree_error,
+            "stage_timings_ms": {
+                "tree_ms": round((stage_t1 - stage_t0) * 1000, 2),
+                "refusion_ms": round((stage_t2 - stage_t1) * 1000, 2),
+                "prep_ms": round((stage_t3 - stage_t2) * 1000, 2),
+                "execute_ms": round((stage_t4 - stage_t3) * 1000, 2),
+                "cursor_ms": round((stage_t5 - stage_t4) * 1000, 2),
+                "post_tree_ms": round((stage_t6 - stage_t5) * 1000, 2),
+                "feedback_ms": round((stage_t7 - stage_t6) * 1000, 2),
+                "total_ms": round((stage_t7 - stage_t0) * 1000, 2),
+            },
             "next": (
                 "Call qwen_cua_predict with the same session_id for the next step."
-                if feedback_recorded
-                or (execution_succeeded and selected == set(range(len(parsed_actions))))
-                else "The next prediction will reset this session because execution was partial or failed."
+                if session_continuable
+                else "The action was not fully completed and recorded; the next prediction will reset this session."
             ),
         }
 
@@ -893,7 +929,21 @@ def mcp_autogui_main(mcp):
                 }
                 for value in qwen_sessions.values()
             ]
-        return {"backend": health, "pending_sessions": sessions}
+            pending = [
+                {
+                    "session_id": value["session_id"],
+                    "instruction": value["instruction"],
+                    "step": value["step"],
+                    "frame_id": value["frame_id"],
+                }
+                for value in qwen_sessions.values()
+                if not value.get("execution_complete") and not value.get("requires_reset")
+            ]
+        return {
+            "backend": health,
+            "pending_sessions": pending,
+            "known_sessions": sessions,
+        }
 
     if _env_enabled("GUI_OMNIPARSER_ENABLED"):
         register_omniparser_tools(mcp)

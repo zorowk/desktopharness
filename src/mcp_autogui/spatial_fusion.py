@@ -206,7 +206,7 @@ def screen_size_from_treeland(tree: dict[str, Any]) -> tuple[float, float]:
 def desktop_bounds_from_treeland(tree: dict[str, Any]) -> dict[str, float]:
     background_rects = []
     for layer in tree.get("layers", []):
-        if layer.get("name") != "background":
+        if "background" not in str(layer.get("name") or "").lower():
             continue
         for window in layer.get("windows", []):
             for key in ("boundingRect", "geometry"):
@@ -442,7 +442,7 @@ def _append_window(
     geometry = window.get("geometry") or {}
     if not _has_area(geometry):
         return
-    if layer_name == "workspace" and window.get("visible") is not True:
+    if "workspace" in str(layer_name).lower() and window.get("visible") is not True:
         return
 
     window.setdefault("layer", layer_value)
