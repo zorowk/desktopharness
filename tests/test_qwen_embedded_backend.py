@@ -233,6 +233,42 @@ class EmbeddedServiceTests(unittest.TestCase):
         self.assertEqual(agent.calls[1]["history"], [])
         self.assertEqual(agent.calls[1]["feedback"]["status"], "rejected")
 
+    def test_dynamic_controller_prompt_does_not_reset_task_history(self):
+        agent = FakeAgent()
+        service = QwenCUAService(_config(), agent=agent)
+        service.predict(
+            "open settings\n\nController precision constraint: move to [100, 100]",
+            _png(),
+            "session-1",
+            session_instruction="open settings",
+        )
+        service.record_execution("session-1", status="success", execution=[])
+
+        service.predict(
+            "open settings",
+            _png(),
+            "session-1",
+            session_instruction="open settings",
+        )
+
+        self.assertEqual(agent.calls[0]["instruction"], "open settings\n\nController precision constraint: move to [100, 100]")
+        self.assertEqual(agent.calls[1]["instruction"], "open settings")
+        self.assertEqual(len(agent.calls[1]["history"]), 1)
+
+    def test_failed_first_prediction_does_not_leave_empty_session(self):
+        class FailingAgent:
+            def predict(self, *args, **kwargs):
+                raise ValueError("invalid model response")
+
+            def close(self):
+                return None
+
+        service = QwenCUAService(_config(), agent=FailingAgent())
+        with self.assertRaisesRegex(ValueError, "invalid model response"):
+            service.predict("open settings", _png(), "unknown-to-caller")
+
+        self.assertEqual(service.health()["sessions"], 0)
+
     def test_health_does_not_require_model_connection(self):
         service = QwenCUAService(_config(base_url=""), agent=FakeAgent())
         health = service.health()

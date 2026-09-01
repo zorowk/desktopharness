@@ -612,21 +612,25 @@ def mcp_autogui_main(mcp):
             resolved_session_id,
             image_mime="image/png",
             client_step=client_step,
+            session_instruction=normalized_instruction,
         )
-        parsed_actions = parse_qwen_actions(backend_result.get("actions", []))
-        violation = _qwen_constraint_violation(parsed_actions, constraint)
-        if violation is not None:
+        try:
+            parsed_actions = parse_qwen_actions(backend_result.get("actions", []))
+            violation = _qwen_constraint_violation(parsed_actions, constraint)
+            if violation is not None:
+                raise ValueError(violation)
+        except Exception as exc:
             await asyncio.to_thread(
                 record_qwen_execution,
                 resolved_session_id,
                 "rejected",
                 {
                     "constraint": constraint,
-                    "proposed_actions": parsed_actions,
+                    "proposed_actions": backend_result.get("actions", []),
                 },
-                violation,
+                f"Proposal validation rejected: {type(exc).__name__}: {exc}",
             )
-            raise ValueError(f"Qwen proposal rejected by controller constraint: {violation}")
+            raise ValueError(f"Qwen proposal rejected by controller validation: {exc}") from exc
         fused = fuse_qwen_actions_with_treeland(
             parsed_actions,
             treeland_tree,

@@ -157,9 +157,11 @@ class ToolRegistrationTests(unittest.TestCase):
         class FakeBackend:
             def __init__(self):
                 self.instructions = []
+                self.predict_kwargs = []
 
             def predict(self, instruction, *args, **kwargs):
                 self.instructions.append(instruction)
+                self.predict_kwargs.append(kwargs)
                 return {
                     "agent_type": "cua",
                     "actions": ["pyautogui.moveTo(100, 100)"],
@@ -226,6 +228,58 @@ class ToolRegistrationTests(unittest.TestCase):
             {"x": 100, "y": 125},
         )
         self.assertIn("Return coordinate [100, 125] exactly", backend.instructions[0])
+        self.assertEqual(backend.predict_kwargs[0]["session_instruction"], "move to the calibration point")
+
+    def test_invalid_post_prediction_action_is_rejected_and_released(self):
+        async def immediate_to_thread(function, *args, **kwargs):
+            return function(*args, **kwargs)
+
+        class FakeBackend:
+            def __init__(self):
+                self.feedback = []
+
+            def predict(self, *args, **kwargs):
+                return {
+                    "agent_type": "cua",
+                    "actions": ["pyautogui.not_allowed(1)"],
+                    "observation_text": "",
+                    "action_text": "",
+                    "assistant_output": "",
+                    "telemetry": {},
+                }
+
+            def reset(self, session_id):
+                return None
+
+            def health(self):
+                return {"ok": True}
+
+            def record_execution(self, session_id, **kwargs):
+                self.feedback.append({"session_id": session_id, **kwargs})
+                return {"ok": True, "committed": False}
+
+        mcp = FakeMCP()
+        backend = FakeBackend()
+        with patch(
+            "mcp_autogui.mcp_autogui_main.QwenBackendClient",
+            return_value=backend,
+        ), patch(
+            "mcp_autogui.mcp_autogui_main.get_treeland_layout_tree",
+            return_value={"layers": []},
+        ), patch(
+            "mcp_autogui.mcp_autogui_main.asyncio.to_thread",
+            side_effect=immediate_to_thread,
+        ), patch.dict(os.environ, {"GUI_OMNIPARSER_ENABLED": "0"}, clear=False):
+            mcp_autogui_main(mcp)
+            with self.assertRaisesRegex(ValueError, "controller validation"):
+                asyncio.run(
+                    mcp.functions["qwen_cua_predict"](
+                        "invalid action test", "explicit-session"
+                    )
+                )
+
+        self.assertEqual(backend.feedback[0]["status"], "rejected")
+        self.assertIn("pyautogui.not_allowed is not allowed", backend.feedback[0]["reason"])
 
 
 if __name__ == "__main__":

@@ -118,32 +118,40 @@ class QwenCUAService:
         image_quality: int | None = None,
         client_step: int | None = None,
         accessibility_tree: str | None = None,
+        session_instruction: str | None = None,
     ) -> dict[str, Any]:
         del image_mime, image_quality
         self._validate_session_id(session_id)
-        normalized_instruction = instruction.strip()
-        if not normalized_instruction:
+        model_instruction = instruction.strip()
+        if not model_instruction:
             raise ValueError("instruction must not be empty")
-        session = self._get_or_create_session(session_id)
+        stable_instruction = (session_instruction or model_instruction).strip()
+        if not stable_instruction:
+            raise ValueError("session_instruction must not be empty")
+        session, created = self._get_or_create_session(session_id, include_created=True)
         with session.lock:
             if session.pending is not None:
                 raise RuntimeError(
                     "Qwen-CUA session already has a pending proposal; record its execution or reset"
                 )
-            if session.instruction and session.instruction != normalized_instruction:
+            if session.instruction and session.instruction != stable_instruction:
                 session.history.clear()
                 session.previous_feedback = None
-            session.instruction = normalized_instruction
-            prediction = self._get_agent().predict(
-                normalized_instruction,
-                screenshot,
-                session.history,
-                accessibility_tree=accessibility_tree,
-                previous_feedback=session.previous_feedback,
-            )
+            session.instruction = stable_instruction
+            try:
+                prediction = self._get_agent().predict(
+                    model_instruction,
+                    screenshot,
+                    session.history,
+                    accessibility_tree=accessibility_tree,
+                    previous_feedback=session.previous_feedback,
+                )
+            except Exception:
+                self._discard_new_empty_session(session_id, session, created)
+                raise
             session.pending = _PendingProposal(
                 prediction=prediction,
-                instruction=normalized_instruction,
+                instruction=stable_instruction,
                 client_step=client_step,
             )
             return {
@@ -254,9 +262,39 @@ class QwenCUAService:
                 )
             return self._agent
 
-    def _get_or_create_session(self, session_id: str) -> _Session:
+    def _get_or_create_session(
+        self,
+        session_id: str,
+        *,
+        include_created: bool = False,
+    ) -> _Session | tuple[_Session, bool]:
         with self._sessions_lock:
-            return self._sessions.setdefault(session_id, _Session())
+            session = self._sessions.get(session_id)
+            created = session is None
+            if session is None:
+                session = _Session()
+                self._sessions[session_id] = session
+        if include_created:
+            return session, created
+        return session
+
+    def _discard_new_empty_session(
+        self,
+        session_id: str,
+        session: _Session,
+        created: bool,
+    ) -> None:
+        """Avoid retaining an unreachable session when the first prediction fails."""
+        if not created:
+            return
+        with self._sessions_lock:
+            if (
+                self._sessions.get(session_id) is session
+                and session.pending is None
+                and not session.history
+                and session.previous_feedback is None
+            ):
+                self._sessions.pop(session_id, None)
 
     def _get_session(self, session_id: str) -> _Session:
         self._validate_session_id(session_id)

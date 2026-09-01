@@ -95,7 +95,9 @@ class HttpQwenBackendClient:
         image_quality: int | None = None,
         client_step: int | None = None,
         accessibility_tree: str | None = None,
+        session_instruction: str | None = None,
     ) -> dict[str, Any]:
+        del session_instruction
         metadata: dict[str, Any] = {
             "frontend_id": session_id,
             "instruction": instruction,
@@ -209,6 +211,7 @@ class QwenBackendClient:
         image_quality: int | None = None,
         client_step: int | None = None,
         accessibility_tree: str | None = None,
+        session_instruction: str | None = None,
     ) -> dict[str, Any]:
         return self._delegate.predict(
             instruction,
@@ -218,6 +221,7 @@ class QwenBackendClient:
             image_quality=image_quality,
             client_step=client_step,
             accessibility_tree=accessibility_tree,
+            session_instruction=session_instruction,
         )
 
     def record_execution(
