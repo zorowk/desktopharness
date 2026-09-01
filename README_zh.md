@@ -27,6 +27,9 @@ Qwen-CUA 工具采用显式的两阶段流程：
 2. 检查 `fused_actions` 中的目标窗口和校验信息，然后调用 `qwen_cua_execute(session_id, action_indexes)` 执行全部或选定动作。
 3. 使用同一个 `session_id` 再次调用 `qwen_cua_predict` 获取下一步。新任务应使用新的 session，或先调用 `qwen_cua_reset`。
 
+需要由控制层做精确坐标校准、但仍必须经过 Qwen 时，向 `qwen_cua_predict` 传入
+`expected_action="mouse_move"` 和 `expected_screenshot_coordinate=[x, y]`。控制层会把截图目标换算为 Qwen 原生的 0–999 坐标，要求 Qwen 给出这一个提案，并拒绝超出像素容差的返回。普通视觉任务不应传这些可选约束。
+
 模型输出只允许经过 AST 解析的 `pyautogui` 白名单动作；任意 Python、动态表达式和未允许的函数都会被拒绝。执行前会重新读取 Treeland tree，如果动作坐标命中的窗口与预测时不同，也会拒绝执行。
 
 内嵌服务先保存待处理动作提案，只有收到本地实际执行结果后才更新正式 Qwen 历史。成功、部分执行、拒绝和失败都会显式反馈给同一 session，避免模型历史与真实桌面状态分叉。旧 HTTP 兼容后端不支持反馈时，仍会自动重置不一致 session。

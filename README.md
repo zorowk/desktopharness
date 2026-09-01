@@ -32,6 +32,13 @@ The Qwen tools use an explicit two-stage flow:
 2. Inspect `fused_actions`, then call `qwen_cua_execute(session_id, action_indexes)` to execute all or selected allowlisted actions.
 3. Call `qwen_cua_predict` again with the same session for the next step. Use a new session or call `qwen_cua_reset` for a new task.
 
+For a controller-led coordinate calibration while still using Qwen, pass
+`expected_action="mouse_move"` and
+`expected_screenshot_coordinate=[x, y]` to `qwen_cua_predict`. The control
+layer converts the screenshot target to Qwen's native 0..999 coordinate space,
+requires that single Qwen proposal, and rejects a result outside the configured
+pixel tolerance. Ordinary visual tasks should omit these optional constraints.
+
 The embedded service keeps each prediction pending and commits it to Qwen
 history only after receiving the actual local execution result. Success,
 partial execution, rejection, and failure are fed back explicitly. The old HTTP

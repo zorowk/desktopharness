@@ -1,6 +1,10 @@
 import unittest
 
-from mcp_autogui.spatial_fusion import fuse_qwen_actions_with_treeland
+from mcp_autogui.spatial_fusion import (
+    desktop_bounds_from_treeland,
+    desktop_to_screenshot_point,
+    fuse_qwen_actions_with_treeland,
+)
 
 
 def sample_tree():
@@ -108,6 +112,24 @@ class QwenTreeFusionTests(unittest.TestCase):
             fused["actions"][0]["desktop_coordinate"],
             {"x": -900.0, "y": 100.0},
         )
+
+    def test_desktop_coordinate_maps_back_to_screenshot_pixels(self):
+        tree = sample_tree()
+        tree["layers"][0]["windows"][0]["geometry"] = {
+            "x": 0,
+            "y": 0,
+            "width": 1536,
+            "height": 864,
+        }
+
+        screenshot = desktop_to_screenshot_point(
+            {"x": 1252.8, "y": 80.0},
+            1920,
+            1080,
+            desktop_bounds_from_treeland(tree),
+        )
+
+        self.assertEqual(screenshot, {"x": 1566.0, "y": 100.0})
 
 
 if __name__ == "__main__":

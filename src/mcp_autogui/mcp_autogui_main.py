@@ -22,11 +22,91 @@ from .qwen_backend import QwenBackendClient
 from .spatial_fusion import (
     actionable_treeland_windows,
     build_action_targets,
+    desktop_bounds_from_treeland,
+    desktop_to_screenshot_point,
     fuse_omniparser_with_treeland,
     fuse_qwen_actions_with_treeland,
 )
 
 INPUT_IMAGE_SIZE = 960
+
+
+def _qwen_precision_constraint(
+    expected_action: str,
+    expected_screenshot_coordinate: list[float] | None,
+    coordinate_tolerance_px: float,
+    screenshot_size: tuple[int, int],
+) -> dict | None:
+    """Build a controller-owned constraint for one Qwen mouse-move proposal."""
+    action = expected_action.strip()
+    if not action and expected_screenshot_coordinate is None:
+        return None
+    if action != "mouse_move":
+        raise ValueError("expected_action must be 'mouse_move' when using a coordinate constraint")
+    if not (
+        isinstance(expected_screenshot_coordinate, list)
+        and len(expected_screenshot_coordinate) == 2
+        and all(
+            isinstance(value, (int, float)) and not isinstance(value, bool)
+            for value in expected_screenshot_coordinate
+        )
+    ):
+        raise ValueError("expected_screenshot_coordinate must be a numeric [x, y] pair")
+    if not isinstance(coordinate_tolerance_px, (int, float)) or isinstance(
+        coordinate_tolerance_px, bool
+    ):
+        raise ValueError("coordinate_tolerance_px must be numeric")
+    if not 0 <= coordinate_tolerance_px <= 20:
+        raise ValueError("coordinate_tolerance_px must be between 0 and 20")
+
+    width, height = screenshot_size
+    x, y = (float(value) for value in expected_screenshot_coordinate)
+    if not (0 <= x < width and 0 <= y < height):
+        raise ValueError("expected_screenshot_coordinate is outside the current screenshot")
+    normalized = {
+        "x": round(x * 999 / (width - 1)),
+        "y": round(y * 999 / (height - 1)),
+    }
+    return {
+        "expected_action": action,
+        "expected_screenshot_coordinate": {"x": x, "y": y},
+        "qwen_normalized_coordinate": normalized,
+        "coordinate_tolerance_px": float(coordinate_tolerance_px),
+    }
+
+
+def _qwen_constraint_prompt(constraint: dict) -> str:
+    normalized = constraint["qwen_normalized_coordinate"]
+    target = constraint["expected_screenshot_coordinate"]
+    return (
+        "Controller precision constraint (authoritative for this next step):\n"
+        "- Return exactly action `mouse_move`.\n"
+        "- Qwen coordinates use the normalized 0..999 space.\n"
+        f"- Return coordinate [{normalized['x']}, {normalized['y']}] exactly.\n"
+        f"- This is checked against screenshot pixel ({target['x']}, {target['y']})."
+    )
+
+
+def _qwen_constraint_violation(actions: list[dict], constraint: dict | None) -> str | None:
+    if constraint is None:
+        return None
+    if len(actions) != 1 or actions[0].get("type") != "moveTo":
+        return "expected exactly one Qwen mouse_move action"
+    coordinate = actions[0].get("coordinate")
+    if not isinstance(coordinate, dict):
+        return "Qwen mouse_move action has no coordinate"
+    target = constraint["expected_screenshot_coordinate"]
+    tolerance = constraint["coordinate_tolerance_px"]
+    if (
+        abs(float(coordinate["x"]) - target["x"]) > tolerance
+        or abs(float(coordinate["y"]) - target["y"]) > tolerance
+    ):
+        return (
+            "Qwen coordinate does not satisfy the controller constraint: "
+            f"expected screenshot ({target['x']}, {target['y']}) ± {tolerance}px, "
+            f"got ({coordinate['x']}, {coordinate['y']})"
+        )
+    return None
 
 
 def get_treeland_layout_tree(timeout=35):
@@ -466,6 +546,9 @@ def mcp_autogui_main(mcp):
         instruction: str,
         session_id: str = '',
         reset: bool = False,
+        expected_action: str = '',
+        expected_screenshot_coordinate: list[float] | None = None,
+        coordinate_tolerance_px: float = 2.0,
     ) -> list:
         """Ask Qwen-CUA for one GUI step and fuse its coordinates with Treeland.
 
@@ -476,6 +559,13 @@ def mcp_autogui_main(mcp):
         instruction: The bounded GUI task for the current Qwen-CUA session.
         session_id: Reuse the returned ID for subsequent steps of the same task.
         reset: Reset the backend session before this prediction.
+        expected_action: Optional controller constraint; currently supports
+            ``mouse_move`` only.
+        expected_screenshot_coordinate: Optional screenshot-pixel target for
+            the constrained Qwen action. It is converted to Qwen's native
+            0..999 coordinate space and checked after prediction.
+        coordinate_tolerance_px: Allowed screenshot-pixel error for the
+            constrained result (0 to 20).
         """
         normalized_instruction = instruction.strip()
         if not normalized_instruction:
@@ -502,19 +592,41 @@ def mcp_autogui_main(mcp):
         screenshot_bytes, screenshot_size, treeland_tree = await asyncio.to_thread(
             capture_qwen_frame
         )
+        constraint = _qwen_precision_constraint(
+            expected_action,
+            expected_screenshot_coordinate,
+            coordinate_tolerance_px,
+            screenshot_size,
+        )
+        model_instruction = normalized_instruction
+        if constraint is not None:
+            model_instruction = f"{normalized_instruction}\n\n{_qwen_constraint_prompt(constraint)}"
         with qwen_sessions_lock:
             previous = qwen_sessions.get(resolved_session_id) or {}
             client_step = int(previous.get("step", 0)) + 1
 
         backend_result = await asyncio.to_thread(
             qwen_backend.predict,
-            normalized_instruction,
+            model_instruction,
             screenshot_bytes,
             resolved_session_id,
             image_mime="image/png",
             client_step=client_step,
         )
         parsed_actions = parse_qwen_actions(backend_result.get("actions", []))
+        violation = _qwen_constraint_violation(parsed_actions, constraint)
+        if violation is not None:
+            await asyncio.to_thread(
+                record_qwen_execution,
+                resolved_session_id,
+                "rejected",
+                {
+                    "constraint": constraint,
+                    "proposed_actions": parsed_actions,
+                },
+                violation,
+            )
+            raise ValueError(f"Qwen proposal rejected by controller constraint: {violation}")
         fused = fuse_qwen_actions_with_treeland(
             parsed_actions,
             treeland_tree,
@@ -539,6 +651,7 @@ def mcp_autogui_main(mcp):
             "frame_id": frame_id,
             "step": client_step,
             "instruction": normalized_instruction,
+            "coordinate_constraint": constraint,
             "agent_type": backend_result.get("agent_type"),
             "observation": backend_result.get("observation_text", ""),
             "action_text": backend_result.get("action_text", ""),
@@ -579,6 +692,7 @@ def mcp_autogui_main(mcp):
                 raise ValueError("action_indexes contains an out-of-range index")
 
         latest_tree = await asyncio.to_thread(get_treeland_layout_tree)
+        latest_desktop_bounds = desktop_bounds_from_treeland(latest_tree)
         latest_fused = fuse_qwen_actions_with_treeland(
             parsed_actions,
             latest_tree,
@@ -657,7 +771,13 @@ def mcp_autogui_main(mcp):
                 }
             else:
                 execution_coordinate = latest["desktop_coordinate"]
-            set_absolute_coordinate(execution_actions[index], execution_coordinate)
+            input_coordinate = desktop_to_screenshot_point(
+                execution_coordinate,
+                state["screenshot_size"][0],
+                state["screenshot_size"][1],
+                latest_desktop_bounds,
+            )
+            set_absolute_coordinate(execution_actions[index], input_coordinate)
 
         execution_results = await asyncio.to_thread(
             execute_parsed_actions,
@@ -665,6 +785,13 @@ def mcp_autogui_main(mcp):
             pyautogui,
             action_indexes=action_indexes,
         )
+        try:
+            cursor_x, cursor_y = await asyncio.to_thread(pyautogui.position)
+            post_action_cursor = {"x": float(cursor_x), "y": float(cursor_y)}
+            post_action_cursor_error = None
+        except Exception as exc:
+            post_action_cursor = None
+            post_action_cursor_error = f"{type(exc).__name__}: {exc}"
         post_tree = None
         post_tree_error = None
         try:
@@ -690,6 +817,8 @@ def mcp_autogui_main(mcp):
                 "selected_action_indexes": sorted(selected),
                 "actual_actions": [execution_actions[index] for index in sorted(selected)],
                 "results": execution_results,
+                "post_action_cursor": post_action_cursor,
+                "post_action_cursor_error": post_action_cursor_error,
                 "post_tree_error": post_tree_error,
             },
             None if all_actions_succeeded else "One or more actions failed",
@@ -722,6 +851,9 @@ def mcp_autogui_main(mcp):
                 or (execution_succeeded and selected == set(range(len(parsed_actions))))
             ),
             "execution_results": execution_results,
+            "executed_actions": [execution_actions[index] for index in sorted(selected)],
+            "post_action_cursor": post_action_cursor,
+            "post_action_cursor_error": post_action_cursor_error,
             "backend_feedback": backend_feedback,
             "post_action_windows": (
                 len(actionable_treeland_windows(post_tree)) if post_tree is not None else None

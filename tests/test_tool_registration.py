@@ -150,6 +150,83 @@ class ToolRegistrationTests(unittest.TestCase):
             {"x": 500.0, "y": 400.0},
         )
 
+    def test_qwen_coordinate_constraint_uses_qwen_and_checks_its_result(self):
+        async def immediate_to_thread(function, *args, **kwargs):
+            return function(*args, **kwargs)
+
+        class FakeBackend:
+            def __init__(self):
+                self.instructions = []
+
+            def predict(self, instruction, *args, **kwargs):
+                self.instructions.append(instruction)
+                return {
+                    "agent_type": "cua",
+                    "actions": ["pyautogui.moveTo(100, 100)"],
+                    "observation_text": "",
+                    "action_text": "Move cursor",
+                    "assistant_output": "",
+                    "telemetry": {},
+                }
+
+            def reset(self, session_id):
+                return None
+
+            def health(self):
+                return {"ok": True}
+
+            def record_execution(self, session_id, **kwargs):
+                return {"ok": True, "committed": False}
+
+        tree = {
+            "currentMode": "Normal",
+            "layers": [
+                {
+                    "name": "background",
+                    "layer": 0,
+                    "windows": [
+                        {
+                            "appId": "desktop",
+                            "title": "Desktop",
+                            "visible": True,
+                            "z": 0,
+                            "geometry": {"x": 0, "y": 0, "width": 1000, "height": 800},
+                        }
+                    ],
+                    "workspaces": [],
+                }
+            ],
+        }
+        backend = FakeBackend()
+        mcp = FakeMCP()
+        with patch(
+            "mcp_autogui.mcp_autogui_main.QwenBackendClient",
+            return_value=backend,
+        ), patch(
+            "mcp_autogui.mcp_autogui_main.get_treeland_layout_tree",
+            return_value=tree,
+        ), patch(
+            "mcp_autogui.mcp_autogui_main.asyncio.to_thread",
+            side_effect=immediate_to_thread,
+        ), patch.dict(os.environ, {"GUI_OMNIPARSER_ENABLED": "0"}, clear=False):
+            mcp_autogui_main(mcp)
+            result = asyncio.run(
+                mcp.functions["qwen_cua_predict"](
+                    "move to the calibration point",
+                    "constraint-session",
+                    False,
+                    "mouse_move",
+                    [100, 100],
+                    2.0,
+                )
+            )
+        payload = json.loads(result[0])
+        self.assertEqual(
+            payload["coordinate_constraint"]["qwen_normalized_coordinate"],
+            {"x": 100, "y": 125},
+        )
+        self.assertIn("Return coordinate [100, 125] exactly", backend.instructions[0])
+
 
 if __name__ == "__main__":
     unittest.main()

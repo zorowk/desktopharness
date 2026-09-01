@@ -361,6 +361,27 @@ def _screenshot_to_desktop_point(
     }
 
 
+def desktop_to_screenshot_point(
+    coordinate: dict[str, Any],
+    screenshot_width: int,
+    screenshot_height: int,
+    desktop_bounds: dict[str, float],
+) -> dict[str, float]:
+    """Map Treeland logical desktop coordinates to input/screenshot pixels."""
+    if screenshot_width <= 0 or screenshot_height <= 0:
+        raise ValueError("Screenshot size must be positive")
+    if desktop_bounds["width"] <= 0 or desktop_bounds["height"] <= 0:
+        raise ValueError("Treeland desktop bounds must be positive")
+    return {
+        "x": (_number(coordinate.get("x")) - desktop_bounds["x"])
+        * screenshot_width
+        / desktop_bounds["width"],
+        "y": (_number(coordinate.get("y")) - desktop_bounds["y"])
+        * screenshot_height
+        / desktop_bounds["height"],
+    }
+
+
 def _point_in_geometry(point: dict[str, float], geometry: dict[str, Any]) -> bool:
     if not _has_area(geometry):
         return False
