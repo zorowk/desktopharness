@@ -260,10 +260,10 @@ Task 6: 格式化输出与验证
 - [x] 真实模型坐标校准：明确要求 Qwen 返回归一化 `[52,92]` 后，真实 `qwen3_rl` 返回唯一 `mouse_move`，解析为截图 `(100,99)`、融合为 Treeland 逻辑 `(80.0,79.2)`，执行成功；相对截图目标 `(100,100)` 的量化误差为 1 像素。
 - [x] 修正并复验执行坐标空间：此前 `(100,100)` 被读回约 `(250,250)` 的根因是 Treeland 读取了 `dde` UID 作用域中的 Adaptive 默认配置。改为在正确 DConfig 作用域应用 Flat 后，本轮截图尺寸、Treeland 桌面边界、融合坐标、实际 `pyautogui.moveTo` 参数与执行后光标均为 `(100,100)`，误差 0。
 - [x] 把 Qwen 固定限制为单步视觉建议：每个预测只接受一个 `computer_use` 调用；多调用和异常长回复在成为提案前拒绝，默认 token 预算为 1024；已通过回归测试，待真实模型复验。
-- [ ] 明确定义 Qwen 图像坐标、截图像素、逻辑桌面坐标、Treeland geometry 和输入注入坐标之间的转换。
-- [ ] 处理桌面原点不为 `(0, 0)`、显示器位于主屏左侧/上方、负坐标和不同缩放比例。
+- [x] 明确定义 Qwen 图像坐标、截图像素、逻辑桌面坐标、Treeland geometry 和输入注入坐标之间的转换：`spatial_fusion.py` 模块 docstring 定义三个坐标空间（Qwen 归一化 0..999、截图像素、Treeland 逻辑桌面含所有层）；新增 `screenshot_to_qwen_normalized`/`qwen_normalized_to_screenshot` 作为归一化转换唯一来源（`mcp_autogui_main._qwen_precision_constraint` 改为引用，消除重复公式）。
+- [ ] 处理桌面原点不为 `(0, 0)`、显示器位于主屏左侧/上方、负坐标和不同缩放比例。负原点往返已由 `desktop_to_screenshot_point`/`_screenshot_to_desktop_point` 支持并有往返测试（`test_desktop_screenshot_roundtrip_with_negative_origin`）；真实多屏/混合缩放待硬件。
 - [ ] 补充横跨多个显示器的窗口、跨屏拖动和动态插拔显示器测试。
-- [ ] 对所有坐标转换增加往返误差测试和边界测试。
+- [x] 对所有坐标转换增加往返误差测试和边界测试：Qwen 归一化↔截图像素往返误差 ≤1px（6 组采样含边界）、归一化边界 `(0,0)`/`(999,999)`、截图像素↔逻辑桌面往返（含负原点）——新增 4 个测试（`tests/test_qwen_tree_fusion.py`），全量 43 项通过。
 
 ### 3.3 融合与命中改进
 
@@ -281,8 +281,8 @@ Task 6: 格式化输出与验证
 
 ### 3.5 执行后验证
 
-- [ ] 每次动作后重新采集截图和树，计算窗口、焦点、标题和 geometry 的前后差异。
-- [ ] 为点击、输入、滚动等动作定义最低可验证信号；没有状态变化不自动等同于成功。
+- [x] 每次动作后重新采集截图和树，计算窗口、焦点、标题和 geometry 的前后差异：`qwen_cua_execute` 新增 `post_validation` 字段（执行前后活动窗口摘要、`active_window_changed`、可操作窗口数、目标窗口 geometry 前后对比、`target_moved`），基于执行前 `latest_tree` 与执行后 `post_tree`；真实链路复验通过（移动动作返回焦点未变、窗口数 3→3、目标 geometry 未变）。
+- [x] 为点击、输入、滚动等动作定义最低可验证信号：移动=执行后光标与目标坐标比对（`post_action_cursor`）；点击/双击=光标读回+下一帧活动窗口/窗口数变化（Firefox 打开验证）；输入=剪贴板字节级比对（重复任务 2/5）；滚动=下一帧页面可见内容变化；按键/快捷键=Tree 窗口数变化（Esc）或窗口 `visible` 翻转（Super+D）。已在本轮及 2.5 各节真实应用；完整"决定继续/重试/重置"闭环属阶段 5 任务执行器。
 - [ ] 将验证结果用于决定继续、重试、重新定位、重置会话或请求人工介入。
 
 ### 3.6 阶段验收
