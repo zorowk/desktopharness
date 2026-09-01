@@ -77,5 +77,53 @@ class QwenActionTests(unittest.TestCase):
         self.assertEqual(fake.calls, [])
 
 
+REAL_MODEL_RETURNS = [
+    # 2026-08-31 ~ 2026-09-01 真实 qwen3_rl 返回样本（脱敏，无敏感内容）
+    "pyautogui.moveTo(100, 100)",
+    "pyautogui.moveTo(200, 200)",
+    "pyautogui.moveTo(1919, 1079)",
+    "pyautogui.moveTo(500, 409)",
+    "pyautogui.click(960, 449)",
+    "pyautogui.click(150, 514)",
+    "pyautogui.doubleClick(150, 514)",
+    "pyautogui.scroll(-3)",
+    "pyautogui.press('esc')",
+    "pyautogui.hotkey('super', 'd')",
+    "pyautogui.hotkey('command', 'd')",
+    "pyautogui.hotkey('ctrl', 'z')",
+    "pyautogui.hotkey('ctrl', 'a')",
+    "pyautogui.press('backspace')",
+    "pyautogui.write('Treeland CUA input test 2026-09-01')",
+    "time.sleep(1.0)",
+    "DONE",
+    "WAIT",
+    "FAIL",
+    "pyautogui.write('line one')\npyautogui.press('enter')",
+]
+
+DANGEROUS_RETURNS = [
+    "import os; os.system('false')",
+    "os.system('rm -rf /')",
+    "pyautogui.click(get_x(), 20)",
+    "pyautogui.not_allowed(1)",
+]
+
+
+class RealReturnCompatibilityTests(unittest.TestCase):
+    """Regression fixtures from real qwen3_rl returns (phase 2.5/2.7)."""
+
+    def test_real_model_action_samples_parse(self):
+        for sample in REAL_MODEL_RETURNS:
+            with self.subTest(action=sample):
+                parsed = parse_qwen_actions([sample])
+                self.assertTrue(parsed)
+
+    def test_dangerous_returns_are_rejected(self):
+        for sample in DANGEROUS_RETURNS:
+            with self.subTest(action=sample):
+                with self.assertRaises(ValueError):
+                    parse_qwen_actions([sample])
+
+
 if __name__ == "__main__":
     unittest.main()
