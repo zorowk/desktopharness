@@ -29,7 +29,8 @@ DESCRIPTION_TEMPLATE = """Use a mouse and keyboard to interact with a desktop GU
 {resolution_info}
 * Consult the latest screenshot before choosing a coordinate.
 * Aim at the visible center of a control unless the task explicitly requires an edge.
-* Return only the next action, not an entire speculative action sequence."""
+* Return only the next action, not an entire speculative action sequence.
+* Emit exactly one `<tool_call>` block, then stop. Never repeat a tool call."""
 
 SYSTEM_TEMPLATE = """# Tools
 

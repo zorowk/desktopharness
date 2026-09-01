@@ -27,3 +27,6 @@ Not migrated:
 Default configuration uses `CUA_BACKEND_MODE=embedded`. Model configuration is
 read from `CUA_MODEL_BASE_URL`, `CUA_MODEL`, `CUA_MODEL_API_KEY`,
 `CUA_MODEL_TIMEOUT`, `CUA_MODEL_TLS_VERIFY`, and `CUA_MODEL_TRUST_ENV`.
+`CUA_MAX_TOKENS` defaults to 1024 and `CUA_MAX_RESPONSE_CHARS` defaults to
+16384. Each prediction accepts exactly one `computer_use` tool call; oversized
+or multi-call model responses are rejected before they can become a proposal.

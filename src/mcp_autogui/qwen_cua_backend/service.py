@@ -41,6 +41,7 @@ class QwenCUAConfig:
     verify_tls: bool
     trust_env: bool
     max_tokens: int
+    max_response_chars: int
     top_p: float
     temperature: float
     max_history_turns: int
@@ -56,7 +57,8 @@ class QwenCUAConfig:
             timeout=_env_float("CUA_MODEL_TIMEOUT", 120.0, 1.0),
             verify_tls=_env_bool("CUA_MODEL_TLS_VERIFY", True),
             trust_env=_env_bool("CUA_MODEL_TRUST_ENV", False),
-            max_tokens=_env_int("CUA_MAX_TOKENS", 4096),
+            max_tokens=_env_int("CUA_MAX_TOKENS", 1024),
+            max_response_chars=_env_int("CUA_MAX_RESPONSE_CHARS", 16384, 1024),
             top_p=min(1.0, _env_float("CUA_TOP_P", 0.5)),
             temperature=min(1.0, _env_float("CUA_TEMPERATURE", 0.1)),
             max_history_turns=_env_int("CUA_MAX_HISTORY_TURNS", 4),
@@ -243,6 +245,7 @@ class QwenCUAService:
                     verify_tls=self.config.verify_tls,
                     trust_env=self.config.trust_env,
                     max_tokens=self.config.max_tokens,
+                    max_response_chars=self.config.max_response_chars,
                     top_p=self.config.top_p,
                     temperature=self.config.temperature,
                     max_history_turns=self.config.max_history_turns,

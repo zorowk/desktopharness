@@ -39,7 +39,8 @@ class QwenCUAAgent:
         timeout: float = 120.0,
         verify_tls: bool = True,
         trust_env: bool = False,
-        max_tokens: int = 4096,
+        max_tokens: int = 1024,
+        max_response_chars: int = 16384,
         top_p: float = 0.5,
         temperature: float = 0.1,
         max_history_turns: int = 4,
@@ -52,6 +53,8 @@ class QwenCUAAgent:
             raise ValueError("CUA_MODEL is required in embedded mode")
         if coordinate_type not in {"relative", "absolute"}:
             raise ValueError("CUA_COORDINATE_TYPE must be relative or absolute")
+        if max_response_chars < 1024:
+            raise ValueError("CUA_MAX_RESPONSE_CHARS must be at least 1024")
         self.model = model
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key or "not-required"
@@ -59,6 +62,7 @@ class QwenCUAAgent:
         self.verify_tls = verify_tls
         self.trust_env = trust_env
         self.max_tokens = max_tokens
+        self.max_response_chars = max_response_chars
         self.top_p = top_p
         self.temperature = temperature
         self.max_history_turns = max_history_turns
@@ -202,6 +206,11 @@ class QwenCUAAgent:
         content = response.choices[0].message.content
         if not isinstance(content, str) or not content.strip():
             raise RuntimeError("Qwen model returned an empty response")
+        if len(content) > self.max_response_chars:
+            raise RuntimeError(
+                "Qwen model response exceeds CUA_MAX_RESPONSE_CHARS "
+                f"({self.max_response_chars})"
+            )
         return content
 
     def _get_client(self) -> Any:
@@ -263,26 +272,26 @@ def parse_s2_response(
         ]
     if not payloads:
         raise ValueError("Qwen response does not contain a computer_use tool call")
-
-    actions: list[str] = []
-    for payload in payloads:
-        try:
-            tool_call = json.loads(payload)
-        except json.JSONDecodeError as exc:
-            raise ValueError("Qwen tool call is not valid JSON") from exc
-        if tool_call.get("name") != "computer_use":
-            raise ValueError("Qwen tool call must use computer_use")
-        arguments = tool_call.get("arguments")
-        if not isinstance(arguments, dict):
-            raise ValueError("Qwen computer_use arguments must be an object")
-        actions.extend(
-            _computer_use_to_actions(
-                arguments,
-                original_size=original_size,
-                processed_size=processed_size,
-                coordinate_type=coordinate_type,
-            )
+    if len(payloads) != 1:
+        raise ValueError(
+            "Qwen response must contain exactly one computer_use tool call for the next step"
         )
+
+    try:
+        tool_call = json.loads(payloads[0])
+    except json.JSONDecodeError as exc:
+        raise ValueError("Qwen tool call is not valid JSON") from exc
+    if tool_call.get("name") != "computer_use":
+        raise ValueError("Qwen tool call must use computer_use")
+    arguments = tool_call.get("arguments")
+    if not isinstance(arguments, dict):
+        raise ValueError("Qwen computer_use arguments must be an object")
+    actions = _computer_use_to_actions(
+        arguments,
+        original_size=original_size,
+        processed_size=processed_size,
+        coordinate_type=coordinate_type,
+    )
     if not actions:
         raise ValueError("Qwen tool call did not produce an action")
     return action_text or "Perform the proposed GUI action", actions

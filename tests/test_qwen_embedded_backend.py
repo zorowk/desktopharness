@@ -71,6 +71,7 @@ def _config(base_url="http://model.invalid/v1"):
         verify_tls=True,
         trust_env=False,
         max_tokens=256,
+        max_response_chars=16384,
         top_p=0.5,
         temperature=0.1,
         max_history_turns=4,
@@ -116,6 +117,7 @@ class EmbeddedAgentTests(unittest.TestCase):
 
         self.assertEqual(prediction.actions, ["pyautogui.moveTo(500, 400)"])
         self.assertEqual(completions.payload["model"], "qwen-test")
+        self.assertEqual(completions.payload["max_tokens"], 1024)
         self.assertEqual(completions.payload["messages"][-1]["role"], "user")
 
     def test_parse_s2_relative_coordinate_and_text(self):
@@ -145,6 +147,49 @@ class EmbeddedAgentTests(unittest.TestCase):
                 processed_size=(96, 96),
                 coordinate_type="relative",
             )
+
+    def test_parse_s2_rejects_multiple_tool_calls(self):
+        response = """Action: Repeated move
+<tool_call>
+{"name":"computer_use","arguments":{"action":"mouse_move","coordinate":[500,500]}}
+</tool_call>
+<tool_call>
+{"name":"computer_use","arguments":{"action":"mouse_move","coordinate":[500,500]}}
+</tool_call>"""
+        with self.assertRaisesRegex(ValueError, "exactly one"):
+            parse_s2_response(
+                response,
+                original_size=(1000, 800),
+                processed_size=(992, 800),
+                coordinate_type="relative",
+            )
+
+    def test_agent_rejects_oversized_model_response(self):
+        response_text = "x" * 1025
+
+        class FakeCompletions:
+            def create(self, **kwargs):
+                message = type("Message", (), {"content": response_text})()
+                choice = type("Choice", (), {"message": message})()
+                return type("Response", (), {"choices": [choice]})()
+
+        fake_client = type(
+            "Client",
+            (),
+            {
+                "chat": type("Chat", (), {"completions": FakeCompletions()})(),
+                "close": lambda self: None,
+            },
+        )()
+        agent = QwenCUAAgent(
+            model="qwen-test",
+            base_url="http://model.invalid/v1",
+            api_key="",
+            max_response_chars=1024,
+        )
+        agent._client = fake_client
+        with self.assertRaisesRegex(RuntimeError, "CUA_MAX_RESPONSE_CHARS"):
+            agent.predict("move cursor", _png(), [])
 
     def test_prepare_screenshot_preserves_original_size(self):
         encoded, original, processed = prepare_screenshot(_png(1000, 801), factor=32)
