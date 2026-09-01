@@ -204,7 +204,11 @@ def screen_size_from_treeland(tree: dict[str, Any]) -> tuple[float, float]:
 
 
 def desktop_bounds_from_treeland(tree: dict[str, Any]) -> dict[str, float]:
-    background_rects = []
+    source_rects = [
+        window.get("geometry") or {}
+        for window in flatten_treeland_windows(tree)
+        if _has_area(window.get("geometry") or {})
+    ]
     for layer in tree.get("layers", []):
         if "background" not in str(layer.get("name") or "").lower():
             continue
@@ -212,15 +216,8 @@ def desktop_bounds_from_treeland(tree: dict[str, Any]) -> dict[str, float]:
             for key in ("boundingRect", "geometry"):
                 rect = window.get(key) or {}
                 if _has_area(rect):
-                    background_rects.append(rect)
+                    source_rects.append(rect)
                     break
-    source_rects = background_rects
-    if not source_rects:
-        source_rects = [
-            window.get("geometry") or {}
-            for window in flatten_treeland_windows(tree)
-            if _has_area(window.get("geometry") or {})
-        ]
     if not source_rects:
         raise ValueError("Unable to determine desktop bounds from Treeland tree")
     min_x = min(_number(rect.get("x")) for rect in source_rects)

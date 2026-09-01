@@ -211,15 +211,45 @@ class QwenTreeFusionTests(unittest.TestCase):
         self.assertEqual(target["appId"], "deepin-editor")
         self.assertTrue(target["visible"])
 
-    def test_desktop_bounds_from_background_container_layer_name(self):
-        tree = sample_tree()
-        tree["layers"][0]["name"] = "BackgroundContainer"
-        tree["layers"][1]["name"] = "WorkspaceContainer"
+    def test_desktop_bounds_include_top_dock_layer(self):
+        tree = {
+            "currentMode": "Normal",
+            "layers": [
+                {
+                    "name": "BackgroundContainer",
+                    "layer": -2,
+                    "windows": [
+                        {
+                            "appId": "",
+                            "title": "",
+                            "visible": True,
+                            "z": 0,
+                            "geometry": {"x": 0, "y": 0, "width": 1920, "height": 1032},
+                        }
+                    ],
+                    "workspaces": [],
+                },
+                {
+                    "name": "TopContainer",
+                    "layer": 2,
+                    "windows": [
+                        {
+                            "appId": "",
+                            "title": "",
+                            "visible": True,
+                            "z": 0,
+                            "geometry": {"x": 0, "y": 1032, "width": 1920, "height": 48},
+                        }
+                    ],
+                    "workspaces": [],
+                },
+            ],
+        }
 
         bounds = desktop_bounds_from_treeland(tree)
 
-        self.assertEqual(bounds["width"], 1000.0)
-        self.assertEqual(bounds["height"], 800.0)
+        self.assertEqual(bounds["height"], 1080.0)
+        self.assertEqual(bounds["y"], 0.0)
 
 
 if __name__ == "__main__":
