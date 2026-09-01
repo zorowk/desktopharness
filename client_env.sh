@@ -10,6 +10,31 @@ if [ -f "${CLIENT_ENV_FILE}" ]; then
     set +a
 fi
 
+MOUSE_SPEED_ACTION="unchanged"
+for client_env_arg in "$@"; do
+    case "${client_env_arg}" in
+        --flat-speed)
+            if [[ "${MOUSE_SPEED_ACTION}" != "unchanged" ]]; then
+                echo "Only one mouse speed action may be specified." >&2
+                exit 2
+            fi
+            MOUSE_SPEED_ACTION="flat"
+            ;;
+        --restore-speed)
+            if [[ "${MOUSE_SPEED_ACTION}" != "unchanged" ]]; then
+                echo "Only one mouse speed action may be specified." >&2
+                exit 2
+            fi
+            MOUSE_SPEED_ACTION="restore"
+            ;;
+        *)
+            echo "Unknown argument: ${client_env_arg}" >&2
+            echo "Usage: $0 [--flat-speed | --restore-speed]" >&2
+            exit 2
+            ;;
+    esac
+done
+
 #解决部分设备没有~/.Xauthority文件的问题
 if [ ! -f ~/.Xauthority ]; then
     touch ~/.Xauthority
@@ -60,9 +85,12 @@ fi
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_DIR="${PROJECT_ROOT}/.venv"
 TMP_BASE="$(mktemp -d /tmp/treeland-autotests-deps.XXXXXX)"
+YDOTOOL_UDEV_RULE_SOURCE="${PROJECT_ROOT}/udev/99-ydotoold-mouse.rules"
+YDOTOOL_UDEV_RULE_TARGET="/etc/udev/rules.d/99-ydotoold-mouse.rules"
 
 REPO_4_URL="https://github.com/ReimuNotMoe/ydotool.git"
 REPO_4_DIR="${TMP_BASE}/ydotool"
+MOUSE_DCONFIG_ARGS=()
 
 # uv index mirrors
 export UV_INDEX_URL="https://pypi.tuna.tsinghua.edu.cn/simple/"
@@ -91,8 +119,31 @@ install_ydotool() {
   )
 }
 
+install_ydotool_udev_rule() {
+  if ! command -v udevadm >/dev/null 2>&1; then
+    echo "udevadm is required to classify the ydotoold pointer device." >&2
+    return 1
+  fi
+
+  if [[ ! -f "${YDOTOOL_UDEV_RULE_SOURCE}" ]]; then
+    echo "Missing ydotoold udev rule: ${YDOTOOL_UDEV_RULE_SOURCE}" >&2
+    return 1
+  fi
+
+  if [[ -f "${YDOTOOL_UDEV_RULE_TARGET}" ]] \
+      && cmp -s "${YDOTOOL_UDEV_RULE_SOURCE}" "${YDOTOOL_UDEV_RULE_TARGET}"; then
+    echo "ydotoold mouse udev rule is already installed; skipping." >&2
+    return 0
+  fi
+
+  echo "Installing ydotoold mouse udev rule..." >&2
+  sudo install -m 0644 "${YDOTOOL_UDEV_RULE_SOURCE}" "${YDOTOOL_UDEV_RULE_TARGET}"
+  sudo udevadm control --reload-rules
+}
+
 echo "[1/7] Optional ydotool install"
 install_ydotool
+install_ydotool_udev_rule || exit 1
 
 echo "[2/7] Install uv"
 
@@ -139,6 +190,50 @@ echo "Wayland environment variables have been set." >&2
 
 USER_UID="$(id -u)"
 USER_GID="$(id -g)"
+USER_NAME="$(id -un)"
+TREELAND_DCONFIG_USER="${TREELAND_DCONFIG_USER:-dde}"
+MOUSE_DCONFIG_ARGS=(
+    -a org.deepin.dde.treeland
+    -r org.deepin.dde.treeland.user.seat
+    -s "/${USER_NAME}"
+)
+
+run_treeland_dconfig() {
+    sudo -u "${TREELAND_DCONFIG_USER}" dde-dconfig "$@"
+}
+
+configure_flat_mouse() {
+    if ! command -v dde-dconfig >/dev/null 2>&1; then
+        echo "dde-dconfig is required to set the Treeland mouse acceleration profile." >&2
+        return 1
+    fi
+
+    echo "Setting Treeland mouse acceleration to Flat with speed 0 (DConfig user: ${TREELAND_DCONFIG_USER})..." >&2
+    if ! run_treeland_dconfig set "${MOUSE_DCONFIG_ARGS[@]}" \
+        -k mouseAccelerationProfile -v 1 >/dev/null \
+        || ! run_treeland_dconfig set "${MOUSE_DCONFIG_ARGS[@]}" \
+        -k mouseAccelSpeed -v 0 >/dev/null; then
+        echo "Failed to set the temporary Treeland mouse acceleration configuration." >&2
+        return 1
+    fi
+}
+
+restore_default_mouse_speed() {
+    if ! command -v dde-dconfig >/dev/null 2>&1; then
+        echo "dde-dconfig is required to restore the Treeland mouse acceleration profile." >&2
+        return 1
+    fi
+
+    echo "Restoring the default Treeland mouse acceleration configuration (DConfig user: ${TREELAND_DCONFIG_USER})..." >&2
+    if ! run_treeland_dconfig reset "${MOUSE_DCONFIG_ARGS[@]}" \
+        -k mouseAccelerationProfile >/dev/null \
+        || ! run_treeland_dconfig reset "${MOUSE_DCONFIG_ARGS[@]}" \
+        -k mouseAccelSpeed >/dev/null; then
+        echo "Failed to restore the default Treeland mouse acceleration configuration." >&2
+        return 1
+    fi
+}
+
 touch_flag=()
 if command -v libinput >/dev/null 2>&1; then
     echo "Checking touchscreen via libinput..." >&2
@@ -151,6 +246,15 @@ if command -v libinput >/dev/null 2>&1; then
 else
     echo "libinput not found; skipping touchscreen detection." >&2
 fi
+
+case "${MOUSE_SPEED_ACTION}" in
+    flat)
+        configure_flat_mouse || exit 1
+        ;;
+    restore)
+        restore_default_mouse_speed || exit 1
+        ;;
+esac
 
 if ! pgrep -x ydotoold >/dev/null 2>&1; then
     echo "Starting ydotoold (UID=${USER_UID}, GID=${USER_GID})..." >&2
