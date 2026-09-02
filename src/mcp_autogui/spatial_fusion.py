@@ -282,6 +282,11 @@ def fuse_qwen_actions_with_treeland(
                 for window_id, window in enumerate(windows)
                 if _point_in_geometry(desktop_coordinate, window.get("geometry") or {})
             ]
+            # Treeland supplies top-level container geometry and stacking only.
+            # BackgroundContainer can contain clickable desktop icons, and a
+            # workspace window can contain arbitrary controls. Do not infer
+            # child-control semantics from this match: it identifies only the
+            # frontmost top-level target for validation and reprojection.
             target = (
                 _qwen_window_target(matching_windows[0][0], matching_windows[0][1], desktop_coordinate)
                 if matching_windows

@@ -99,6 +99,40 @@ class QwenTreeFusionTests(unittest.TestCase):
             fused["actions"][0]["validation"]["target_source"], "active_window"
         )
 
+    def test_background_container_is_a_valid_top_level_target_without_control_semantics(self):
+        tree = {
+            "currentMode": "Normal",
+            "layers": [
+                {
+                    "name": "BackgroundContainer",
+                    "layer": -2,
+                    "windows": [
+                        {
+                            "appId": "",
+                            "title": "",
+                            "container": "BackgroundContainer",
+                            "visible": True,
+                            "active": False,
+                            "z": 0,
+                            "geometry": {"x": 0, "y": 0, "width": 1920, "height": 1080},
+                        }
+                    ],
+                    "workspaces": [],
+                }
+            ],
+        }
+
+        fused = fuse_qwen_actions_with_treeland(
+            [{"type": "click", "coordinate": {"x": 136, "y": 273}}],
+            tree,
+            (1920, 1080),
+        )
+
+        action = fused["actions"][0]
+        self.assertEqual(action["target_window"]["container"], "BackgroundContainer")
+        self.assertTrue(action["validation"]["target_window_found"])
+        self.assertTrue(action["validation"]["topmost_at_coordinate"])
+
     def test_screenshot_coordinate_maps_to_negative_desktop_origin(self):
         tree = sample_tree()
         tree["layers"][0]["windows"][0]["geometry"] = {
