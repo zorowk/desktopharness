@@ -5,6 +5,7 @@ import asyncio
 import json
 import unittest
 from unittest.mock import patch
+from subprocess import CompletedProcess
 
 from PIL import Image as PILImage
 
@@ -115,6 +116,10 @@ class ToolRegistrationTests(unittest.TestCase):
 
         self.assertIn("qwen_cua_predict", mcp.tools)
         self.assertIn("qwen_cua_execute", mcp.tools)
+        self.assertIn("desktop_capabilities_list", mcp.tools)
+        self.assertIn("desktop_shortcut_invoke", mcp.tools)
+        self.assertIn("desktop_applications_list", mcp.tools)
+        self.assertIn("desktop_application_launch", mcp.tools)
         self.assertNotIn("omniparser_details_on_screen", mcp.tools)
 
     def test_enabling_omniparser_requires_server(self):
@@ -122,6 +127,67 @@ class ToolRegistrationTests(unittest.TestCase):
             os.environ.pop("OMNI_PARSER_SERVER", None)
             with self.assertRaises(RuntimeError):
                 mcp_autogui_main(FakeMCP())
+
+    def test_platform_shortcut_uses_controller_capability_not_schema_command(self):
+        mcp = FakeMCP()
+        pressed = []
+        capability = {
+            "capability_id": "desktop.launcher.toggle",
+            "enabled": True,
+            "auto_invokable": True,
+            "normalized_hotkeys": [["winleft"]],
+        }
+        fake_pyautogui.press = lambda key: pressed.append(key)
+        with patch(
+            "mcp_autogui.mcp_autogui_main.find_capability",
+            return_value=capability,
+        ), patch(
+            "mcp_autogui.mcp_autogui_main.get_treeland_layout_tree",
+            return_value=tree_with_active_app(),
+        ), patch.dict(os.environ, {"GUI_OMNIPARSER_ENABLED": "0"}, clear=False):
+            mcp_autogui_main(mcp)
+            result = asyncio.run(
+                mcp.functions["desktop_shortcut_invoke"]("desktop.launcher.toggle")
+            )
+
+        self.assertEqual(pressed, ["winleft"])
+        self.assertEqual(result["status"], "success")
+
+    def test_application_launch_rejects_path_before_invoking_dde_am(self):
+        mcp = FakeMCP()
+        with patch.dict(os.environ, {"GUI_OMNIPARSER_ENABLED": "0"}, clear=False):
+            mcp_autogui_main(mcp)
+            with self.assertRaises(ValueError):
+                asyncio.run(
+                    mcp.functions["desktop_application_launch"]("/usr/bin/editor")
+                )
+
+    def test_application_launch_uses_dde_am_and_validates_active_window(self):
+        async def immediate_to_thread(function, *args, **kwargs):
+            return function(*args, **kwargs)
+
+        mcp = FakeMCP()
+        completed = CompletedProcess(["dde-am", "deepin-editor"], 0, "", "")
+        with patch(
+            "mcp_autogui.mcp_autogui_main.subprocess.run",
+            return_value=completed,
+        ) as run, patch(
+            "mcp_autogui.mcp_autogui_main.get_treeland_layout_tree",
+            return_value=tree_with_active_app("deepin-editor"),
+        ), patch(
+            "mcp_autogui.mcp_autogui_main.asyncio.to_thread",
+            side_effect=immediate_to_thread,
+        ), patch.dict(os.environ, {"GUI_OMNIPARSER_ENABLED": "0"}, clear=False):
+            mcp_autogui_main(mcp)
+            result = asyncio.run(
+                mcp.functions["desktop_application_launch"](
+                    "deepin-editor", "deepin-editor", 0
+                )
+            )
+
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["task_validation"]["status"], "passed")
+        self.assertEqual(run.call_args.args[0], ["dde-am", "deepin-editor"])
 
     def test_prediction_returns_qwen_action_with_treeland_target(self):
         async def immediate_to_thread(function, *args, **kwargs):

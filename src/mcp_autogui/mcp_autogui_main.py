@@ -21,6 +21,12 @@ import PIL
 import requests
 from .qwen_actions import execute_parsed_actions, parse_qwen_actions, set_absolute_coordinate
 from .qwen_backend import QwenBackendClient
+from .desktop_capabilities import (
+    find_capability,
+    load_desktop_application_catalogue,
+    load_keybinding_catalogue,
+    validate_application_id,
+)
 from .spatial_fusion import (
     actionable_treeland_windows,
     build_action_targets,
@@ -695,6 +701,164 @@ def mcp_autogui_main(mcp):
         screenshot.save(screenshot_buffer, format="PNG")
         tree = get_treeland_layout_tree()
         return screenshot_buffer.getvalue(), screenshot.size, tree
+
+    @mcp.tool()
+    async def desktop_capabilities_list(category: str = '') -> list[dict]:
+        """List controller-owned Deepin desktop shortcuts and their policies.
+
+        This reads the packaged keybinding schema.  Results marked
+        ``source=default-schema`` are defaults, not proof that a user has not
+        changed the shortcut at runtime.  ``auto_invokable`` is the controller
+        policy decision; it is deliberately narrower than ``enabled``.
+        """
+        requested_category = category.strip().lower()
+        items = load_keybinding_catalogue()
+        if requested_category:
+            items = [
+                item for item in items
+                if item["category"].lower() == requested_category
+            ]
+        return items
+
+    @mcp.tool()
+    async def desktop_shortcut_invoke(capability_id: str) -> dict:
+        """Invoke one low-risk, controller-approved Deepin shortcut.
+
+        The capability must be returned by ``desktop_capabilities_list`` and
+        marked ``auto_invokable``.  This API never executes the schema's raw
+        command/DBus trigger value.
+        """
+        capability = find_capability(capability_id.strip())
+        if capability is None:
+            raise ValueError("unknown desktop capability_id")
+        if not capability["enabled"]:
+            raise ValueError("desktop capability is disabled in the default schema")
+        if not capability["auto_invokable"]:
+            raise PermissionError(
+                "controller policy does not allow automatic invocation of this capability"
+            )
+        hotkeys = capability["normalized_hotkeys"]
+        if not hotkeys:
+            raise ValueError("desktop capability has no keyboard shortcut")
+        keys = hotkeys[0]
+        before = _active_window_summary(get_treeland_layout_tree())
+        if len(keys) == 1:
+            pyautogui.press(keys[0])
+        else:
+            pyautogui.hotkey(*keys)
+        _, _, post_tree, evidence = _capture_post_action_frame(
+            capture_qwen_frame,
+            get_treeland_layout_tree,
+            "",
+            0,
+        )
+        return {
+            "status": "success",
+            "capability": capability,
+            "executed_keys": keys,
+            "evidence": {
+                "active_window_before": before,
+                "active_window_after": _active_window_summary(post_tree),
+                "observation": evidence,
+            },
+        }
+
+    @mcp.tool()
+    async def desktop_applications_list(query: str = '', limit: int = 30) -> list[dict]:
+        """Resolve installed desktop applications to safe dde-am application IDs.
+
+        The catalogue contains discovery metadata only; it intentionally omits
+        desktop-entry Exec commands.  Use the returned ``app_id`` with
+        ``desktop_application_launch``.
+        """
+        if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 100:
+            raise ValueError("limit must be an integer between 1 and 100")
+        needle = query.strip().casefold()
+        applications = load_desktop_application_catalogue()
+        if needle:
+            applications = [
+                item for item in applications
+                if needle in item["app_id"].casefold()
+                or needle in item["display_name"].casefold()
+                or needle in (item["display_name_zh_cn"] or "").casefold()
+            ]
+        return applications[:limit]
+
+    @mcp.tool()
+    async def desktop_application_launch(
+        app_id: str,
+        expected_active_app_id: str = '',
+        application_wait_timeout_s: float = DEFAULT_APPLICATION_WAIT_TIMEOUT_S,
+    ) -> dict:
+        """Launch a Deepin application by ID through dde-am and collect evidence.
+
+        Only a plain application ID is accepted.  Paths, URIs, command mode,
+        and arbitrary arguments are not part of this capability.  Supplying an
+        expected Treeland app ID enables deterministic post-launch validation.
+        """
+        resolved_app_id = validate_application_id(app_id)
+        expected_app_id = _expected_active_app_id(expected_active_app_id)
+        timeout_s = _application_wait_timeout(application_wait_timeout_s)
+        active_before = _active_window_summary(get_treeland_layout_tree())
+        try:
+            result = await asyncio.to_thread(
+                subprocess.run,
+                ["dde-am", resolved_app_id],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+        except FileNotFoundError as exc:
+            raise RuntimeError("dde-am is not installed") from exc
+        except subprocess.TimeoutExpired as exc:
+            return {
+                "status": "failed",
+                "app_id": resolved_app_id,
+                "reason": "dde-am launch timed out",
+                "stdout": exc.stdout,
+                "stderr": exc.stderr,
+            }
+
+        if result.returncode != 0:
+            return {
+                "status": "failed",
+                "app_id": resolved_app_id,
+                "returncode": result.returncode,
+                "stdout": result.stdout,
+                "stderr": result.stderr,
+            }
+
+        _, _, post_tree, application_wait = _capture_post_action_frame(
+            capture_qwen_frame,
+            get_treeland_layout_tree,
+            expected_app_id,
+            timeout_s,
+        )
+        active_after = _active_window_summary(post_tree)
+        task_validation = _active_app_task_validation(
+            expected_app_id,
+            active_before,
+            active_after,
+            application_wait,
+        )
+        return {
+            "status": (
+                "success"
+                if task_validation is None or task_validation["status"] == "passed"
+                else "partial"
+            ),
+            "app_id": resolved_app_id,
+            "returncode": result.returncode,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+            "evidence": {
+                "active_window_before": active_before,
+                "active_window_after": active_after,
+                "application_wait": application_wait,
+            },
+            "task_validation": task_validation,
+        }
 
     @mcp.tool()
     async def qwen_cua_predict(

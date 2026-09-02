@@ -26,6 +26,39 @@
 | MCP 逻辑层 | 截图、Tree、坐标、窗口层级、遮挡、陈旧提案、执行、状态机和验证编排 | 不判断按钮文字、桌面图标语义或任务是否在视觉上“看起来完成” |
 | Qwen-CUA | 从截图理解界面，提出下一步鼠标/键盘动作，输出自己声称观察到的内容 | 不直接执行；不决定安全性；不作为最终验收器；不替代确定性坐标和遮挡计算 |
 
+### 2.1 平台能力目录：主控知道系统规则，Qwen 处理视觉剩余部分
+
+“打开应用”不能完全依赖 Qwen 从截图猜桌面图标或记忆快捷键。Deepin 已提供可读取的默认快捷键 schema，以及 `dde-am` 的按应用 ID 启动接口；它们应由 MCP 作为平台能力提供给主控，而不是以原始 shell 命令的形式交给模型。
+
+当前实现提供以下迁移期工具：
+
+| 工具 | 用途 | 安全边界 |
+| --- | --- | --- |
+| `desktop_capabilities_list` | 查询 Deepin 默认快捷键、启用状态、风险和控制器策略 | 不返回 schema 的原始命令/DBus trigger value |
+| `desktop_shortcut_invoke` | 调用经控制器批准的低风险能力 | 仅接受稳定 `capability_id`；不接受任意按键或命令 |
+| `desktop_applications_list` | 从 desktop entry 解析可发现应用的 `app_id` | 不返回 `.desktop` 的 `Exec` 字段 |
+| `desktop_application_launch` | 用 `dde-am <app_id>` 启动应用并采集 Tree evidence | 仅接受纯应用 ID；拒绝路径、URI、选项和 `dde-am -c` |
+
+当前系统默认 schema 的关键事实为：
+
+| `capability_id` | 默认快捷键 | 语义 |
+| --- | --- | --- |
+| `desktop.launcher.toggle` | `Meta` | 切换 Launcher |
+| `desktop.search.open` | `Shift+Space` | 打开 Grand Search |
+| `desktop.desktop.show` | `Meta+D` | 显示桌面 |
+
+因此主控应优先采用以下路径：
+
+```text
+已解析 app_id 的 dde-am 启动
+  > 已验证的 platform shortcut（例如 Meta 打开 Launcher）
+  > Qwen 对 Launcher、搜索结果、欢迎页和应用内部控件的视觉操作
+```
+
+这不会把 Qwen 排除在流程外：Qwen 仍处理没有系统 API 的视觉界面；只是“系统如何打开 Launcher”与“哪个桌面图标是编辑器”不再由它猜测。
+
+`/usr/share/dsg/configs/org.deepin.dde.keybinding` 是默认 schema，不是用户运行时设置的证明。目录结果必须标为 `source=default-schema`；接入 DConfig 或 D-Bus 有效配置查询后，才可以标为 `runtime-verified`。目录中即使 `enabled=true`，也不代表可自动执行：锁屏、注销、关机、关闭窗口等仍由 `controller-policy` 拒绝或要求用户确认。
+
 ## 3. 总体流程
 
 ```text
