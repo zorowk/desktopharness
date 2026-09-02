@@ -30,6 +30,81 @@ class FakeMCP:
         return register
 
 
+class RecordingQwenBackend:
+    def __init__(self):
+        self.feedback = []
+        self.predict_calls = []
+
+    def predict(self, instruction, *args, **kwargs):
+        self.predict_calls.append({"instruction": instruction, "kwargs": kwargs})
+        return {
+            "agent_type": "cua",
+            "actions": ["pyautogui.click(500, 400)"],
+            "observation_text": "",
+            "action_text": "Click the application icon",
+            "assistant_output": "",
+            "telemetry": {},
+        }
+
+    def reset(self, session_id):
+        return None
+
+    def health(self):
+        return {"ok": True}
+
+    def record_execution(self, session_id, **kwargs):
+        self.feedback.append({"session_id": session_id, **kwargs})
+        return {"ok": True, "committed": kwargs.get("status") == "success"}
+
+
+def tree_with_active_app(app_id="desktop", title=None):
+    background = {
+        "name": "background",
+        "layer": 0,
+        "windows": [
+            {
+                "appId": "desktop",
+                "title": "Desktop",
+                "visible": True,
+                "active": app_id == "desktop",
+                "z": 0,
+                "geometry": {"x": 0, "y": 0, "width": 1000, "height": 800},
+            }
+        ],
+        "workspaces": [],
+    }
+    layers = [background]
+    if app_id != "desktop":
+        layers.append(
+            {
+                "name": "workspace",
+                "layer": 1,
+                "windows": [],
+                "workspaces": [
+                    {
+                        "isActive": True,
+                        "windows": [
+                            {
+                                "appId": app_id,
+                                "title": title or app_id,
+                                "visible": True,
+                                "active": True,
+                                "z": 1,
+                                "geometry": {
+                                    "x": 100,
+                                    "y": 100,
+                                    "width": 800,
+                                    "height": 600,
+                                },
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+    return {"currentMode": "Normal", "layers": layers}
+
+
 class ToolRegistrationTests(unittest.TestCase):
     def test_qwen_tools_are_default_and_omniparser_is_disabled(self):
         mcp = FakeMCP()
@@ -143,6 +218,8 @@ class ToolRegistrationTests(unittest.TestCase):
             execution = asyncio.run(mcp.functions["qwen_cua_execute"]("test-session"))
 
         self.assertEqual(execution["status"], "success")
+        self.assertIsNone(execution["task_validation"])
+        self.assertIsNone(execution["task_completed"])
         actual = backend.feedback[0]["execution"]
         self.assertEqual(actual["frame_id"], payload["frame_id"])
         self.assertEqual(
@@ -712,6 +789,184 @@ class ToolRegistrationTests(unittest.TestCase):
         self.assertTrue(execution["post_validation"]["screenshot_changed"])
         self.assertEqual(backend.feedback[0]["status"], "error")
         self.assertIn("post-observation", backend.reset_calls)
+
+    def test_expected_application_waits_until_target_app_is_active(self):
+        async def immediate_to_thread(function, *args, **kwargs):
+            return function(*args, **kwargs)
+
+        desktop = tree_with_active_app()
+        editor = tree_with_active_app("deepin-editor", "Text Editor")
+        backend = RecordingQwenBackend()
+        mcp = FakeMCP()
+        with patch(
+            "mcp_autogui.mcp_autogui_main.QwenBackendClient", return_value=backend
+        ), patch(
+            "mcp_autogui.mcp_autogui_main.get_treeland_layout_tree",
+            side_effect=[desktop, desktop, desktop, editor, editor],
+        ), patch(
+            "mcp_autogui.mcp_autogui_main.APPLICATION_WAIT_POLL_INTERVAL_S", 0
+        ), patch(
+            "mcp_autogui.mcp_autogui_main.asyncio.to_thread",
+            side_effect=immediate_to_thread,
+        ), patch.object(
+            fake_pyautogui, "click", lambda *args, **kwargs: None, create=True
+        ), patch.dict(os.environ, {"GUI_OMNIPARSER_ENABLED": "0"}, clear=False):
+            mcp_autogui_main(mcp)
+            prediction = asyncio.run(
+                mcp.functions["qwen_cua_predict"](
+                    "open Text Editor",
+                    "open-editor",
+                    expected_active_app_id="deepin-editor",
+                    application_wait_timeout_s=0.1,
+                )
+            )
+            payload = json.loads(prediction[0])
+            execution = asyncio.run(mcp.functions["qwen_cua_execute"]("open-editor"))
+
+        self.assertEqual(
+            payload["task_expectation"]["expected_active_app_id"], "deepin-editor"
+        )
+        self.assertEqual(execution["status"], "success")
+        self.assertTrue(execution["task_completed"])
+        self.assertEqual(execution["task_validation"]["status"], "passed")
+        self.assertEqual(execution["task_validation"]["attempts"], 2)
+        self.assertIn("task is complete", execution["next"])
+        self.assertEqual(backend.feedback[0]["status"], "success")
+
+    def test_wrong_application_is_feedback_and_session_can_continue(self):
+        async def immediate_to_thread(function, *args, **kwargs):
+            return function(*args, **kwargs)
+
+        desktop = tree_with_active_app()
+        music = tree_with_active_app("deepin-music", "Music")
+        backend = RecordingQwenBackend()
+        mcp = FakeMCP()
+        with patch(
+            "mcp_autogui.mcp_autogui_main.QwenBackendClient", return_value=backend
+        ), patch(
+            "mcp_autogui.mcp_autogui_main.get_treeland_layout_tree",
+            side_effect=[desktop, desktop, music, music, music],
+        ), patch(
+            "mcp_autogui.mcp_autogui_main.asyncio.to_thread",
+            side_effect=immediate_to_thread,
+        ), patch.object(
+            fake_pyautogui, "click", lambda *args, **kwargs: None, create=True
+        ), patch.dict(os.environ, {"GUI_OMNIPARSER_ENABLED": "0"}, clear=False):
+            mcp_autogui_main(mcp)
+            asyncio.run(
+                mcp.functions["qwen_cua_predict"](
+                    "open Text Editor",
+                    "wrong-app",
+                    expected_active_app_id="deepin-editor",
+                    application_wait_timeout_s=0,
+                )
+            )
+            execution = asyncio.run(mcp.functions["qwen_cua_execute"]("wrong-app"))
+            next_prediction = asyncio.run(
+                mcp.functions["qwen_cua_predict"]("open Text Editor", "wrong-app")
+            )
+
+        next_payload = json.loads(next_prediction[0])
+        self.assertEqual(execution["status"], "partial")
+        self.assertFalse(execution["task_completed"])
+        self.assertTrue(execution["session_continuable"])
+        self.assertEqual(
+            execution["task_validation"]["reason"], "wrong_application_active"
+        )
+        self.assertEqual(
+            execution["task_validation"]["actual_active_app_id"], "deepin-music"
+        )
+        self.assertEqual(backend.feedback[0]["status"], "partial")
+        self.assertEqual(
+            backend.feedback[0]["execution"]["post_validation"]["task_validation"],
+            execution["task_validation"],
+        )
+        self.assertEqual(
+            next_payload["task_expectation"]["expected_active_app_id"], "deepin-editor"
+        )
+
+    def test_expected_application_timeout_reports_no_observable_completion(self):
+        async def immediate_to_thread(function, *args, **kwargs):
+            return function(*args, **kwargs)
+
+        desktop = tree_with_active_app()
+        backend = RecordingQwenBackend()
+        mcp = FakeMCP()
+        with patch(
+            "mcp_autogui.mcp_autogui_main.QwenBackendClient", return_value=backend
+        ), patch(
+            "mcp_autogui.mcp_autogui_main.get_treeland_layout_tree",
+            side_effect=[desktop, desktop, desktop, desktop],
+        ), patch(
+            "mcp_autogui.mcp_autogui_main.asyncio.to_thread",
+            side_effect=immediate_to_thread,
+        ), patch.object(
+            fake_pyautogui, "click", lambda *args, **kwargs: None, create=True
+        ), patch.dict(os.environ, {"GUI_OMNIPARSER_ENABLED": "0"}, clear=False):
+            mcp_autogui_main(mcp)
+            asyncio.run(
+                mcp.functions["qwen_cua_predict"](
+                    "open Text Editor",
+                    "app-timeout",
+                    expected_active_app_id="deepin-editor",
+                    application_wait_timeout_s=0,
+                )
+            )
+            execution = asyncio.run(mcp.functions["qwen_cua_execute"]("app-timeout"))
+
+        self.assertEqual(execution["status"], "partial")
+        self.assertFalse(execution["task_completed"])
+        self.assertTrue(execution["session_continuable"])
+        self.assertEqual(
+            execution["task_validation"]["reason"],
+            "expected_application_not_observed",
+        )
+        self.assertEqual(backend.feedback[0]["status"], "partial")
+
+    def test_done_cannot_bypass_expected_application_assertion(self):
+        async def immediate_to_thread(function, *args, **kwargs):
+            return function(*args, **kwargs)
+
+        class DoneBackend(RecordingQwenBackend):
+            def predict(self, instruction, *args, **kwargs):
+                result = super().predict(instruction, *args, **kwargs)
+                result["actions"] = ["DONE"]
+                result["action_text"] = "DONE"
+                return result
+
+        desktop = tree_with_active_app()
+        backend = DoneBackend()
+        mcp = FakeMCP()
+        with patch(
+            "mcp_autogui.mcp_autogui_main.QwenBackendClient", return_value=backend
+        ), patch(
+            "mcp_autogui.mcp_autogui_main.get_treeland_layout_tree",
+            side_effect=[desktop, desktop, desktop, desktop],
+        ), patch(
+            "mcp_autogui.mcp_autogui_main.asyncio.to_thread",
+            side_effect=immediate_to_thread,
+        ), patch.dict(os.environ, {"GUI_OMNIPARSER_ENABLED": "0"}, clear=False):
+            mcp_autogui_main(mcp)
+            asyncio.run(
+                mcp.functions["qwen_cua_predict"](
+                    "open Text Editor",
+                    "premature-done",
+                    expected_active_app_id="deepin-editor",
+                    application_wait_timeout_s=0,
+                )
+            )
+            execution = asyncio.run(
+                mcp.functions["qwen_cua_execute"]("premature-done")
+            )
+
+        self.assertEqual(execution["status"], "partial")
+        self.assertFalse(execution["task_completed"])
+        self.assertTrue(execution["session_continuable"])
+        self.assertEqual(
+            execution["task_validation"]["reason"],
+            "expected_application_not_observed",
+        )
+        self.assertEqual(backend.feedback[0]["status"], "partial")
 
 
 if __name__ == "__main__":

@@ -27,6 +27,10 @@ Qwen-CUA 工具采用显式的两阶段流程：
 2. 检查 `fused_actions` 中的目标窗口和校验信息，然后调用 `qwen_cua_execute(session_id, action_indexes)` 执行全部或选定动作。
 3. 使用同一个 `session_id` 再次调用 `qwen_cua_predict` 获取下一步。新任务应使用新的 session，或先调用 `qwen_cua_reset`。
 
+打开应用等具有窗口级完成条件的任务，可以在首次预测时传入
+`expected_active_app_id="deepin-editor"`。执行动作后，MCP 会在
+`application_wait_timeout_s`（默认 3 秒）内轮询 Treeland Tree，并在结束时采集一次最终截图和 Tree：预期应用成为活动窗口时返回 `task_completed: true`；打开错误应用或超时时返回 `status: "partial"` 和结构化 `task_validation`，并保留同一 session 供下一轮纠错。Qwen 返回 `DONE` 也不能绕过该 appId 断言。后续使用同一 session 时可省略 `expected_active_app_id`，本机任务状态会继承首次设置。
+
 需要由控制层做精确坐标校准、但仍必须经过 Qwen 时，向 `qwen_cua_predict` 传入
 `expected_action="mouse_move"` 和 `expected_screenshot_coordinate=[x, y]`。控制层会把截图目标换算为 Qwen 原生的 0–999 坐标，要求 Qwen 给出这一个提案，并拒绝超出像素容差的返回。普通视觉任务不应传这些可选约束。
 

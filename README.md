@@ -32,6 +32,17 @@ The Qwen tools use an explicit two-stage flow:
 2. Inspect `fused_actions`, then call `qwen_cua_execute(session_id, action_indexes)` to execute all or selected allowlisted actions.
 3. Call `qwen_cua_predict` again with the same session for the next step. Use a new session or call `qwen_cua_reset` for a new task.
 
+For tasks with a window-level completion condition, such as opening an
+application, pass `expected_active_app_id="deepin-editor"` on the first
+prediction. After execution, the MCP polls the Treeland tree for
+`application_wait_timeout_s` (three seconds by default), then captures one
+final screenshot and tree. It returns
+`task_completed: true` when the expected app becomes active; a wrong app or a
+timeout returns `status: "partial"` with structured `task_validation` while
+keeping the session available for correction. A Qwen `DONE` action cannot
+bypass this assertion. Later predictions in the same session inherit the
+expected appId when the argument is omitted.
+
 For a controller-led coordinate calibration while still using Qwen, pass
 `expected_action="mouse_move"` and
 `expected_screenshot_coordinate=[x, y]` to `qwen_cua_predict`. The control

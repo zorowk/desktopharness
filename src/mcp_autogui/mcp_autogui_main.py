@@ -33,6 +33,136 @@ from .spatial_fusion import (
 )
 
 INPUT_IMAGE_SIZE = 960
+DEFAULT_APPLICATION_WAIT_TIMEOUT_S = 3.0
+MAX_APPLICATION_WAIT_TIMEOUT_S = 30.0
+APPLICATION_WAIT_POLL_INTERVAL_S = 0.2
+
+
+def _expected_active_app_id(value: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError("expected_active_app_id must be a string")
+    return value.strip()
+
+
+def _application_wait_timeout(value: float) -> float:
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        raise ValueError("application_wait_timeout_s must be numeric")
+    timeout = float(value)
+    if not 0 <= timeout <= MAX_APPLICATION_WAIT_TIMEOUT_S:
+        raise ValueError(
+            "application_wait_timeout_s must be between 0 and "
+            f"{MAX_APPLICATION_WAIT_TIMEOUT_S:g}"
+        )
+    return timeout
+
+
+def _capture_post_action_frame(
+    capture_frame,
+    read_tree,
+    expected_app_id: str,
+    timeout_s: float,
+) -> tuple[bytes | None, tuple[int, int] | None, dict | None, dict]:
+    """Poll the lightweight tree, then capture one final post-action frame."""
+    started = time.monotonic()
+    deadline = started + timeout_s
+    attempts = 0
+    poll_error = None
+    observed_tree = None
+
+    if expected_app_id:
+        while True:
+            attempts += 1
+            try:
+                observed_tree = read_tree()
+                poll_error = None
+            except Exception as exc:
+                poll_error = f"{type(exc).__name__}: {exc}"
+
+            active_window = (
+                _active_window_summary(observed_tree)
+                if observed_tree is not None
+                else None
+            )
+            actual_app_id = (active_window or {}).get("appId")
+            if actual_app_id == expected_app_id:
+                break
+
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            time.sleep(min(APPLICATION_WAIT_POLL_INTERVAL_S, remaining))
+
+    observation_error = None
+    try:
+        latest_frame = capture_frame()
+    except Exception as exc:
+        observation_error = f"{type(exc).__name__}: {exc}"
+        latest_frame = (None, None, observed_tree)
+    if attempts == 0:
+        attempts = 1
+
+    waited_ms = round((time.monotonic() - started) * 1000, 2)
+    tree = latest_frame[2]
+    active_window = _active_window_summary(tree) if tree is not None else None
+    actual_app_id = (active_window or {}).get("appId")
+    if not expected_app_id:
+        status = "not-requested"
+    elif actual_app_id == expected_app_id:
+        status = "matched"
+    elif tree is None:
+        status = "observation-unavailable"
+    else:
+        status = "timeout"
+    return (
+        latest_frame[0],
+        latest_frame[1],
+        latest_frame[2],
+        {
+            "status": status,
+            "expected_active_app_id": expected_app_id or None,
+            "actual_active_app_id": actual_app_id,
+            "attempts": attempts,
+            "waited_ms": waited_ms,
+            "poll_error": poll_error,
+            "observation_error": observation_error,
+        },
+    )
+
+
+def _active_app_task_validation(
+    expected_app_id: str,
+    active_before: dict | None,
+    active_after: dict | None,
+    application_wait: dict,
+) -> dict | None:
+    """Evaluate the lightweight active-app postcondition for one session."""
+    if not expected_app_id:
+        return None
+    before_app_id = (active_before or {}).get("appId")
+    actual_app_id = (active_after or {}).get("appId")
+    if actual_app_id == expected_app_id:
+        status = "passed"
+        reason = None
+    elif active_after is None:
+        status = "unknown"
+        reason = "active_window_unavailable"
+    elif actual_app_id and actual_app_id != before_app_id:
+        status = "failed"
+        reason = "wrong_application_active"
+    else:
+        status = "failed"
+        reason = "expected_application_not_observed"
+    return {
+        "assertion": "active_window.appId == expected_active_app_id",
+        "status": status,
+        "reason": reason,
+        "expected_active_app_id": expected_app_id,
+        "actual_active_app_id": actual_app_id,
+        "active_window_before": deepcopy(active_before),
+        "active_window_after": deepcopy(active_after),
+        "attempts": application_wait.get("attempts"),
+        "waited_ms": application_wait.get("waited_ms"),
+    }
 
 
 def _qwen_precision_constraint(
@@ -574,6 +704,8 @@ def mcp_autogui_main(mcp):
         expected_action: str = '',
         expected_screenshot_coordinate: list[float] | None = None,
         coordinate_tolerance_px: float = 2.0,
+        expected_active_app_id: str = '',
+        application_wait_timeout_s: float = DEFAULT_APPLICATION_WAIT_TIMEOUT_S,
     ) -> list:
         """Ask Qwen-CUA for one GUI step and fuse its coordinates with Treeland.
 
@@ -591,6 +723,11 @@ def mcp_autogui_main(mcp):
             0..999 coordinate space and checked after prediction.
         coordinate_tolerance_px: Allowed screenshot-pixel error for the
             constrained result (0 to 20).
+        expected_active_app_id: Optional window-level completion assertion.
+            After execution, Treeland is polled until this appId becomes active
+            or ``application_wait_timeout_s`` expires.
+        application_wait_timeout_s: Seconds to wait for the expected appId
+            after execution (0 to 30).
         """
         normalized_instruction = instruction.strip()
         if not normalized_instruction:
@@ -599,6 +736,16 @@ def mcp_autogui_main(mcp):
 
         with qwen_sessions_lock:
             existing_state = qwen_sessions.get(resolved_session_id)
+        requested_expected_app_id = _expected_active_app_id(expected_active_app_id)
+        inherited_expected_app_id = (
+            str(existing_state.get("expected_active_app_id") or "")
+            if existing_state and not reset
+            else ""
+        )
+        resolved_expected_app_id = requested_expected_app_id or inherited_expected_app_id
+        resolved_application_wait_timeout_s = _application_wait_timeout(
+            application_wait_timeout_s
+        )
         if existing_state and not existing_state.get("execution_complete"):
             if not existing_state.get("requires_reset"):
                 raise RuntimeError(
@@ -608,8 +755,16 @@ def mcp_autogui_main(mcp):
             existing_state
             and existing_state.get("instruction") != normalized_instruction
         )
+        if instruction_changed and not requested_expected_app_id:
+            resolved_expected_app_id = ""
+        expectation_changed = bool(
+            existing_state
+            and requested_expected_app_id
+            and inherited_expected_app_id
+            and requested_expected_app_id != inherited_expected_app_id
+        )
         state_requires_reset = bool(existing_state and existing_state.get("requires_reset"))
-        if reset or instruction_changed or state_requires_reset:
+        if reset or instruction_changed or expectation_changed or state_requires_reset:
             await asyncio.to_thread(qwen_backend.reset, resolved_session_id)
             with qwen_sessions_lock:
                 qwen_sessions.pop(resolved_session_id, None)
@@ -678,6 +833,8 @@ def mcp_autogui_main(mcp):
                 "screenshot_sha256": hashlib.sha256(screenshot_bytes).hexdigest(),
                 "parsed_actions": parsed_actions,
                 "fused": fused,
+                "expected_active_app_id": resolved_expected_app_id,
+                "application_wait_timeout_s": resolved_application_wait_timeout_s,
                 "execution_complete": False,
                 "requires_reset": False,
             }
@@ -687,6 +844,10 @@ def mcp_autogui_main(mcp):
             "frame_id": frame_id,
             "step": client_step,
             "instruction": normalized_instruction,
+            "task_expectation": {
+                "expected_active_app_id": resolved_expected_app_id or None,
+                "application_wait_timeout_s": resolved_application_wait_timeout_s,
+            },
             "coordinate_constraint": constraint,
             "agent_type": backend_result.get("agent_type"),
             "observation": backend_result.get("observation_text", ""),
@@ -852,12 +1013,23 @@ def mcp_autogui_main(mcp):
         post_screenshot_size = None
         post_tree = None
         post_observation_error = None
-        try:
-            post_screenshot_bytes, post_screenshot_size, post_tree = await asyncio.to_thread(
-                capture_qwen_frame
-            )
-        except Exception as exc:
-            post_observation_error = f"{type(exc).__name__}: {exc}"
+        expected_active_app_id = str(state.get("expected_active_app_id") or "")
+        application_wait_timeout_s = float(
+            state.get("application_wait_timeout_s", DEFAULT_APPLICATION_WAIT_TIMEOUT_S)
+        )
+        (
+            post_screenshot_bytes,
+            post_screenshot_size,
+            post_tree,
+            application_wait,
+        ) = await asyncio.to_thread(
+            _capture_post_action_frame,
+            capture_qwen_frame,
+            get_treeland_layout_tree,
+            expected_active_app_id,
+            application_wait_timeout_s,
+        )
+        post_observation_error = application_wait.get("observation_error")
         stage_t6 = time.perf_counter()
         all_actions_selected = selected == set(range(len(parsed_actions)))
         all_actions_succeeded = bool(execution_results) and all(
@@ -865,6 +1037,12 @@ def mcp_autogui_main(mcp):
         )
         active_before = _active_window_summary(latest_tree)
         active_after = _active_window_summary(post_tree) if post_tree is not None else None
+        task_validation = _active_app_task_validation(
+            expected_active_app_id,
+            active_before,
+            active_after,
+            application_wait,
+        )
         windows_before = len(actionable_treeland_windows(latest_tree))
         windows_after = (
             len(actionable_treeland_windows(post_tree)) if post_tree is not None else None
@@ -937,8 +1115,18 @@ def mcp_autogui_main(mcp):
             ),
             "observation_error": post_observation_error,
             "validation_failures": validation_failures,
+            "application_wait": application_wait,
+            "task_validation": task_validation,
         }
-        if all_actions_selected and all_actions_succeeded and not validation_failures:
+        task_validation_passed = (
+            task_validation is None or task_validation.get("status") == "passed"
+        )
+        if (
+            all_actions_selected
+            and all_actions_succeeded
+            and not validation_failures
+            and task_validation_passed
+        ):
             feedback_status = "success"
         elif all_actions_succeeded and not validation_failures:
             feedback_status = "partial"
@@ -949,6 +1137,11 @@ def mcp_autogui_main(mcp):
             feedback_reason = "One or more actions failed"
         elif validation_failures:
             feedback_reason = "Post-action validation failed: " + ", ".join(validation_failures)
+        elif not task_validation_passed:
+            feedback_reason = (
+                "Window-level task assertion did not pass: "
+                f"{task_validation.get('reason')}"
+            )
         backend_feedback = await asyncio.to_thread(
             record_qwen_execution,
             session_id,
@@ -982,17 +1175,29 @@ def mcp_autogui_main(mcp):
         execution_succeeded = bool(execution_results) and all(
             item.get("status") == "success" for item in execution_results
         )
+        task_completed = (
+            task_validation.get("status") == "passed"
+            if task_validation is not None
+            else None
+        )
         return {
             "session_id": session_id,
             "frame_id": state["frame_id"],
             "status": (
                 "success"
-                if all_actions_selected and execution_succeeded and not validation_failures
+                if (
+                    all_actions_selected
+                    and execution_succeeded
+                    and not validation_failures
+                    and task_validation_passed
+                )
                 else "partial"
                 if execution_succeeded and not validation_failures
                 else "error"
             ),
             "session_continuable": session_continuable,
+            "task_completed": task_completed,
+            "task_validation": task_validation,
             "execution_results": execution_results,
             "executed_actions": [execution_actions[index] for index in sorted(selected)],
             "post_action_cursor": post_action_cursor,
@@ -1014,7 +1219,9 @@ def mcp_autogui_main(mcp):
                 "total_ms": round((stage_t7 - stage_t0) * 1000, 2),
             },
             "next": (
-                "Call qwen_cua_predict with the same session_id for the next step."
+                "The expected application is active; the window-level task is complete."
+                if task_completed
+                else "Call qwen_cua_predict with the same session_id for the next step."
                 if session_continuable
                 else "The action was not fully completed and recorded; the next prediction will reset this session."
             ),
@@ -1039,6 +1246,7 @@ def mcp_autogui_main(mcp):
                     "instruction": value["instruction"],
                     "step": value["step"],
                     "frame_id": value["frame_id"],
+                    "expected_active_app_id": value.get("expected_active_app_id") or None,
                 }
                 for value in qwen_sessions.values()
             ]
@@ -1048,6 +1256,7 @@ def mcp_autogui_main(mcp):
                     "instruction": value["instruction"],
                     "step": value["step"],
                     "frame_id": value["frame_id"],
+                    "expected_active_app_id": value.get("expected_active_app_id") or None,
                 }
                 for value in qwen_sessions.values()
                 if not value.get("execution_complete") and not value.get("requires_reset")

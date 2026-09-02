@@ -242,7 +242,13 @@ desktop_y = current_window_y + local_y
 ### 9.1 第一阶段主接口 `qwen_cua_predict`
 
 ```text
-qwen_cua_predict(instruction, session_id="", reset=false)
+qwen_cua_predict(
+    instruction,
+    session_id="",
+    reset=false,
+    expected_active_app_id="",
+    application_wait_timeout_s=3.0
+)
 ```
 
 该接口完成一次截图、一次 Qwen 预测和一次 Tree Fusion，但不执行动作。返回：
@@ -263,6 +269,8 @@ qwen_cua_execute(session_id, action_indexes=null)
 执行前重新获取 Treeland tree。如果坐标当前命中的窗口身份与预测时不同，则拒绝动作；窗口仍是同一个但位置发生变化时，使用窗口内相对坐标重新投影。`action_indexes` 允许控制 AI 选择全部或部分融合动作。
 
 默认 embedded 服务在预测时只保存 pending proposal。`qwen_cua_execute` 将实际执行结果以 `success`、`partial`、`rejected` 或 `error` 反馈给服务，其中只有 `success` 提交为已完成历史，其余状态作为下一轮纠错上下文。旧 HTTP 兼容后端仍采用保守策略：无法提交真实反馈时，部分执行、拒绝或失败会触发下一轮 reset。
+
+如果 session 设置了 `expected_active_app_id`，执行后会在限定时间内轮询轻量 Tree，结束时采集一次最终截图和 Tree，并用活动窗口 `appId` 形成轻量 `task_validation`。匹配时返回 `task_completed=true`；错误应用、没有可观察变化或模型提前返回 `DONE` 时返回 `partial`，将预期值、实际值和失败原因反馈给同一 session。该机制只验证窗口级完成条件，不推断桌面图标或窗口内部控件语义。
 
 ### 9.3 会话和诊断接口
 
