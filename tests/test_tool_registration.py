@@ -15,6 +15,7 @@ fake_pyautogui.screenshot = lambda: PILImage.new("RGB", (1000, 800), "white")
 sys.modules["pyautogui"] = fake_pyautogui
 
 from mcp_autogui.mcp_autogui_main import mcp_autogui_main
+from mcp_autogui.mcp_autogui_main import _window_manager_drag_to
 
 
 class FakeMCP:
@@ -121,6 +122,125 @@ class ToolRegistrationTests(unittest.TestCase):
         self.assertIn("desktop_applications_list", mcp.tools)
         self.assertIn("desktop_application_launch", mcp.tools)
         self.assertNotIn("omniparser_details_on_screen", mcp.tools)
+
+    def test_dragto_moves_active_window_via_wm_without_mouse_down(self):
+        async def immediate_to_thread(function, *args, **kwargs):
+            return function(*args, **kwargs)
+
+        class DragBackend:
+            def __init__(self):
+                self.feedback = []
+
+            def predict(self, *args, **kwargs):
+                return {
+                    "agent_type": "cua",
+                    "actions": ["pyautogui.dragTo(600, 400, duration=0.5)"],
+                    "observation_text": "",
+                    "action_text": "Move the editor window",
+                    "assistant_output": "",
+                    "telemetry": {},
+                }
+
+            def reset(self, session_id):
+                return None
+
+            def health(self):
+                return {"ok": True}
+
+            def record_execution(self, session_id, **kwargs):
+                self.feedback.append(kwargs)
+                return {"ok": True, "committed": kwargs.get("status") == "success"}
+
+        before = tree_with_active_app("deepin-editor", "Editor")
+        editor_before = before["layers"][1]["workspaces"][0]["windows"][0]
+        editor_before["titlebarGeometry"] = {"x": 0, "y": 0, "width": 800, "height": 40}
+        after = json.loads(json.dumps(before))
+        editor_after = after["layers"][1]["workspaces"][0]["windows"][0]
+        editor_after["geometry"] = {"x": 200, "y": 200, "width": 800, "height": 600}
+        calls = []
+        backend = DragBackend()
+        mcp = FakeMCP()
+        fake_pyautogui.position = lambda: (500, 110)
+        fake_pyautogui.size = lambda: (1000, 800)
+        fake_pyautogui.hotkey = lambda *keys: calls.append(("hotkey", keys))
+        fake_pyautogui.moveTo = lambda x, y: calls.append(("moveTo", (x, y)))
+        fake_pyautogui.click = lambda x, y: calls.append(("click", (x, y)))
+        with patch(
+            "mcp_autogui.mcp_autogui_main.QwenBackendClient", return_value=backend
+        ), patch(
+            "mcp_autogui.mcp_autogui_main.get_treeland_layout_tree",
+            side_effect=[before, before, before, after],
+        ), patch(
+            "mcp_autogui.mcp_autogui_main.asyncio.to_thread",
+            side_effect=immediate_to_thread,
+        ), patch.dict(os.environ, {"GUI_OMNIPARSER_ENABLED": "0"}, clear=False):
+            mcp_autogui_main(mcp)
+            asyncio.run(mcp.functions["qwen_cua_predict"]("move editor", "drag-session"))
+            result = asyncio.run(mcp.functions["qwen_cua_execute"]("drag-session"))
+
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["post_validation"]["window_moves"][0]["status"], "verified")
+        self.assertEqual(
+            calls,
+            [("hotkey", ("alt", "f7")), ("moveTo", (600.0, 400.0)), ("click", (600.0, 400.0))],
+        )
+
+    def test_window_drag_refuses_a_content_or_tab_source(self):
+        tree = tree_with_active_app("deepin-editor", "Editor")
+        editor = tree["layers"][1]["workspaces"][0]["windows"][0]
+        editor["titlebarGeometry"] = {"x": 0, "y": 0, "width": 800, "height": 40}
+
+        class FakeInput:
+            def position(self):
+                return (500, 200)  # Inside the editor, below its titlebar.
+
+            def size(self):
+                return (1000, 800)
+
+            def hotkey(self, *keys):
+                self.fail("WM move must not start from window content")
+
+            def moveTo(self, x, y):
+                self.fail("WM move must not start from window content")
+
+            def click(self, x, y):
+                self.fail("WM move must not start from window content")
+
+        with patch(
+            "mcp_autogui.mcp_autogui_main.get_treeland_layout_tree", return_value=tree
+        ):
+            with self.assertRaisesRegex(ValueError, "drag_source_not_on_titlebar_or_resize_border"):
+                _window_manager_drag_to(
+                    {"coordinate": {"x": 600, "y": 400}}, FakeInput(), (1000, 800)
+                )
+
+    def test_window_drag_uses_native_drag_for_an_active_resize_border(self):
+        tree = tree_with_active_app("deepin-editor", "Editor")
+        editor = tree["layers"][1]["workspaces"][0]["windows"][0]
+        editor["titlebarGeometry"] = {"x": 0, "y": 0, "width": 800, "height": 40}
+        calls = []
+
+        class FakeInput:
+            def position(self):
+                return (895, 400)  # 5 px inside the right edge at x=900.
+
+            def size(self):
+                return (1000, 800)
+
+            def dragTo(self, *args, **kwargs):
+                calls.append((args, kwargs))
+
+        with patch(
+            "mcp_autogui.mcp_autogui_main.get_treeland_layout_tree", return_value=tree
+        ):
+            result = _window_manager_drag_to(
+                {"args": [700, 400], "kwargs": {"duration": 0.5}, "coordinate": {"x": 700, "y": 400}},
+                FakeInput(),
+                (1000, 800),
+            )
+
+        self.assertEqual(result["kind"], "native_window_resize")
+        self.assertEqual(calls, [((700, 400), {"duration": 0.5})])
 
     def test_enabling_omniparser_requires_server(self):
         with patch.dict(os.environ, {"GUI_OMNIPARSER_ENABLED": "1"}, clear=False):

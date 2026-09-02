@@ -35,6 +35,7 @@ from .spatial_fusion import (
     flatten_treeland_windows,
     fuse_omniparser_with_treeland,
     fuse_qwen_actions_with_treeland,
+    screenshot_to_desktop_point,
     screenshot_to_qwen_normalized,
 )
 
@@ -42,6 +43,7 @@ INPUT_IMAGE_SIZE = 960
 DEFAULT_APPLICATION_WAIT_TIMEOUT_S = 3.0
 MAX_APPLICATION_WAIT_TIMEOUT_S = 30.0
 APPLICATION_WAIT_POLL_INTERVAL_S = 0.2
+WINDOW_RESIZE_HANDLE_PX = 12.0
 
 
 def _expected_active_app_id(value: str) -> str:
@@ -337,6 +339,110 @@ def _matching_windows_by_identity(tree, identity):
         for window in flatten_treeland_windows(tree)
         if all(window.get(key) == value for key, value in identity.items())
     ]
+
+
+def _point_in_window_titlebar(point, window):
+    """Whether a desktop point is in Treeland's titlebar rectangle.
+
+    Titlebar coordinates are relative to the toplevel window.  We require
+    explicit non-empty metadata: guessing a titlebar height risks treating an
+    editor tab as a safe drag source.
+    """
+    geometry = window.get("geometry") or {}
+    titlebar = window.get("titlebarGeometry") or {}
+    width = float(titlebar.get("width") or 0)
+    height = float(titlebar.get("height") or 0)
+    if width <= 0 or height <= 0:
+        return False
+    left = float(geometry.get("x") or 0) + float(titlebar.get("x") or 0)
+    top = float(geometry.get("y") or 0) + float(titlebar.get("y") or 0)
+    return left <= point["x"] < left + width and top <= point["y"] < top + height
+
+
+def _point_on_window_resize_handle(point, window):
+    """Return whether a point is on a toplevel's outer resize border."""
+    geometry = window.get("geometry") or {}
+    left = float(geometry.get("x") or 0)
+    top = float(geometry.get("y") or 0)
+    width = float(geometry.get("width") or 0)
+    height = float(geometry.get("height") or 0)
+    if width <= 0 or height <= 0:
+        return False
+    right = left + width
+    bottom = top + height
+    x, y = point["x"], point["y"]
+    within_handle_area = (
+        left - WINDOW_RESIZE_HANDLE_PX <= x <= right + WINDOW_RESIZE_HANDLE_PX
+        and top - WINDOW_RESIZE_HANDLE_PX <= y <= bottom + WINDOW_RESIZE_HANDLE_PX
+    )
+    return within_handle_area and (
+        abs(x - left) <= WINDOW_RESIZE_HANDLE_PX
+        or abs(x - right) <= WINDOW_RESIZE_HANDLE_PX
+        or abs(y - top) <= WINDOW_RESIZE_HANDLE_PX
+        or abs(y - bottom) <= WINDOW_RESIZE_HANDLE_PX
+    )
+
+
+def _window_manager_drag_to(action, pyautogui_module, screenshot_size):
+    """Safely interpret dragTo as a window move or edge resize.
+
+    A titlebar source uses WM move mode.  A source on an outer border keeps
+    the native dragTo down/move/up sequence, which the compositor interprets
+    as resize.  Content and tab-strip sources are rejected.
+    """
+    target = action.get("coordinate")
+    if not isinstance(target, dict):
+        raise ValueError("dragTo requires an absolute destination")
+    source_x, source_y = pyautogui_module.position()
+    tree = get_treeland_layout_tree()
+    bounds = desktop_bounds_from_treeland(tree)
+    source_desktop = screenshot_to_desktop_point(
+        {"x": float(source_x), "y": float(source_y)},
+        screenshot_size[0], screenshot_size[1], bounds,
+    )
+    active_windows = [
+        window for window in flatten_treeland_windows(tree) if window.get("active") is True
+    ]
+    if len(active_windows) != 1:
+        raise ValueError("drag_active_window_ambiguous")
+    window = active_windows[0]
+    identity = {
+        key: window.get(key)
+        for key in ("appId", "title", "container", "workspace")
+    }
+    matches = _matching_windows_by_identity(tree, identity)
+    if len(matches) != 1:
+        raise ValueError("drag_source_window_ambiguous")
+
+    destination_x = float(target["x"])
+    destination_y = float(target["y"])
+    screen_width, screen_height = pyautogui_module.size()
+    if not (0 <= destination_x < screen_width and 0 <= destination_y < screen_height):
+        raise ValueError("drag_destination_outside_screen")
+
+    before_geometry = deepcopy(window.get("geometry") or {})
+    if _point_in_window_titlebar(source_desktop, window):
+        kind = "wm_window_move"
+        pyautogui_module.hotkey("alt", "f7")
+        pyautogui_module.moveTo(destination_x, destination_y)
+        # In WM move mode this confirms the new anchor without delivering the
+        # click to an application tab or content area.
+        pyautogui_module.click(destination_x, destination_y)
+    elif _point_on_window_resize_handle(source_desktop, window):
+        kind = "native_window_resize"
+        pyautogui_module.dragTo(*action.get("args", []), **action.get("kwargs", {}))
+    else:
+        raise ValueError("drag_source_not_on_titlebar_or_resize_border")
+    return {
+        "kind": kind,
+        "source_window_identity": identity,
+        "source_geometry_before": before_geometry,
+        "source_screenshot_coordinate": {"x": float(source_x), "y": float(source_y)},
+        "destination_screenshot_coordinate": {
+            "x": destination_x,
+            "y": destination_y,
+        },
+    }
 
 def _env_enabled(name, default=False):
     value = os.getenv(name)
@@ -1078,6 +1184,11 @@ def mcp_autogui_main(mcp):
         latest_fused_actions = latest_fused["actions"]
         for index in sorted(selected):
             action = parsed_actions[index]
+            # A drag starts at the current pointer, not at its destination.
+            # It is validated by _window_manager_drag_to immediately before
+            # entering WM move mode.
+            if action.get("type") == "dragTo":
+                continue
             if action.get("coordinate") is None:
                 continue
             original_target = original_fused_actions[index].get("target_window")
@@ -1136,6 +1247,11 @@ def mcp_autogui_main(mcp):
         for index in sorted(selected):
             original = original_fused_actions[index]
             latest = latest_fused_actions[index]
+            # dragTo's coordinate is its requested final pointer position.
+            # It must remain absolute; reprojecting it relative to whichever
+            # window happens to be under the destination changes its meaning.
+            if parsed_actions[index].get("type") == "dragTo":
+                continue
             if original.get("desktop_coordinate") is None:
                 continue
             original_target = original.get("target_window") or {}
@@ -1163,6 +1279,9 @@ def mcp_autogui_main(mcp):
             execution_actions,
             pyautogui,
             action_indexes=action_indexes,
+            drag_handler=lambda action: _window_manager_drag_to(
+                action, pyautogui, state["screenshot_size"]
+            ),
         )
         stage_t4 = time.perf_counter()
         try:
@@ -1216,6 +1335,8 @@ def mcp_autogui_main(mcp):
         target_identity_status = None
         for index in sorted(selected):
             action = parsed_actions[index]
+            if action.get("type") == "dragTo":
+                continue
             if action.get("coordinate") is None:
                 continue
             original_target = original_fused_actions[index].get("target_window")
@@ -1241,11 +1362,55 @@ def mcp_autogui_main(mcp):
                     "verified"
                 )
             break
+        window_move_validation = []
+        for item in execution_results:
+            result = item.get("result")
+            if not isinstance(result, dict) or result.get("kind") not in {
+                "wm_window_move",
+                "native_window_resize",
+            }:
+                continue
+            identity = result["source_window_identity"]
+            after_matches = (
+                _matching_windows_by_identity(post_tree, identity)
+                if post_tree is not None
+                else []
+            )
+            after_geometry = (
+                deepcopy(after_matches[0].get("geometry") or {})
+                if len(after_matches) == 1
+                else None
+            )
+            size_changed = (
+                after_geometry is not None
+                and (
+                    after_geometry.get("width") != result["source_geometry_before"].get("width")
+                    or after_geometry.get("height") != result["source_geometry_before"].get("height")
+                )
+            )
+            geometry_changed = after_geometry is not None and after_geometry != result["source_geometry_before"]
+            verified = size_changed if result["kind"] == "native_window_resize" else geometry_changed
+            status = (
+                "verified"
+                if verified
+                else "not_observed"
+                if after_geometry is not None
+                else "identity_unavailable"
+            )
+            window_move_validation.append(
+                {
+                    **result,
+                    "source_geometry_after": after_geometry,
+                    "status": status,
+                }
+            )
         validation_failures = []
         if post_observation_error is not None:
             validation_failures.append("post_observation_unavailable")
         if target_identity_status in {"ambiguous_before", "missing_after", "ambiguous_after"}:
             validation_failures.append(f"target_identity_{target_identity_status}")
+        if any(item["status"] != "verified" for item in window_move_validation):
+            validation_failures.append("window_gesture_not_verified")
         post_screenshot_sha256 = (
             hashlib.sha256(post_screenshot_bytes).hexdigest()
             if post_screenshot_bytes is not None
@@ -1266,6 +1431,7 @@ def mcp_autogui_main(mcp):
                 and target_after is not None
                 and target_before != target_after
             ),
+            "window_moves": window_move_validation,
             "screenshot_size": (
                 {"width": post_screenshot_size[0], "height": post_screenshot_size[1]}
                 if post_screenshot_size is not None

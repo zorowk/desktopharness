@@ -150,6 +150,7 @@ def execute_parsed_actions(
     *,
     action_indexes: list[int] | None = None,
     before_action: Callable[[dict[str, Any]], None] | None = None,
+    drag_handler: Callable[[dict[str, Any]], Any] | None = None,
 ) -> list[dict[str, Any]]:
     selected = set(action_indexes) if action_indexes is not None else None
     results = []
@@ -186,8 +187,11 @@ def execute_parsed_actions(
                         }
                     )
                     break
-                function = getattr(pyautogui_module, function_name)
-                result = function(*action.get("args", []), **action.get("kwargs", {}))
+                if function_name == "dragTo" and drag_handler is not None:
+                    result = drag_handler(action)
+                else:
+                    function = getattr(pyautogui_module, function_name)
+                    result = function(*action.get("args", []), **action.get("kwargs", {}))
             results.append({"action_index": index, "status": "success", "result": result})
         except Exception as exc:
             results.append(

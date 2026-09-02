@@ -402,7 +402,7 @@ def qwen_normalized_to_screenshot(
     }
 
 
-def _screenshot_to_desktop_point(
+def screenshot_to_desktop_point(
     coordinate: dict[str, Any],
     screenshot_width: int,
     screenshot_height: int,
@@ -414,6 +414,11 @@ def _screenshot_to_desktop_point(
         "y": desktop_bounds["y"]
         + _number(coordinate.get("y")) * desktop_bounds["height"] / screenshot_height,
     }
+
+
+# Kept as a private alias for callers from before this conversion became part
+# of the controller-facing window-move path.
+_screenshot_to_desktop_point = screenshot_to_desktop_point
 
 
 def desktop_to_screenshot_point(

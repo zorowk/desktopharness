@@ -12,7 +12,11 @@ ACTION_DESCRIPTION = """
 * `type`: Type a string of text.
 * `mouse_move`: Move the cursor to a coordinate.
 * `left_click`: Click the left mouse button at a coordinate.
-* `left_click_drag`: Drag the cursor to a coordinate.
+* `left_click_drag`: Drag the cursor to a coordinate. To move a window, first
+  use `mouse_move` in one step to place the pointer on an empty titlebar area;
+  after that step is executed, use `left_click_drag` in the next step. Never
+  drag an editor tab to move its window. To resize a window, first move to its
+  visible outer border or corner, then drag in the next step.
 * `right_click`: Click the right mouse button at a coordinate.
 * `middle_click`: Click the middle mouse button at a coordinate.
 * `double_click`: Double-click the left mouse button at a coordinate.
