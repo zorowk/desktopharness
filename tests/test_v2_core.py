@@ -282,6 +282,19 @@ class EvidenceAndStateTests(unittest.TestCase):
 
 
 class OrchestratorTests(unittest.TestCase):
+    def test_reset_preserves_audit_history_and_appends_reset_event(self):
+        runtime = CoreOrchestrator(FakeCompositor([snapshot()]), FakeExecutor())
+        runtime.register_task(contract())
+        runtime.observe("task-1")
+        before = runtime.ledger.events("task-1")
+
+        runtime.reset("task-1")
+
+        events = runtime.ledger.events("task-1")
+        self.assertEqual(events[:-1], before)
+        self.assertEqual(events[-1].event_type, "task.reset")
+        self.assertEqual(runtime.store.require(events[-1].object_ref)["reason"], "controller-reset")
+
     def test_delivered_receipt_does_not_complete_before_evaluation(self):
         spec = AssertionSpec("desktop-active", "active_window.app_id", "equals", "desktop")
         compositor = FakeCompositor([snapshot(), replace(snapshot(), snapshot_id="snapshot-2")])

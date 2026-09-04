@@ -633,7 +633,21 @@ class CoreOrchestrator:
         resetter = getattr(self.proposal_provider, "reset", None)
         if callable(resetter):
             resetter(task_id)
-        self.ledger.clear(task_id)
+        reset_ref = self.store.put(
+            {
+                "task_id": task_id,
+                "previous_state": to_primitive(self._states[task_id]),
+                "reason": "controller-reset",
+            },
+            prefix="task-reset",
+        )
+        self._append_event(
+            task_id,
+            "task.reset",
+            "state_transition",
+            reset_ref,
+            caused_by=tuple(event.event_id for event in self.ledger.events(task_id)[-1:]),
+        )
         self._contracts.pop(task_id, None)
         self._states.pop(task_id, None)
         self._latest_snapshot.pop(task_id, None)
