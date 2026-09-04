@@ -30,6 +30,7 @@ class AuditPersistenceTests(unittest.TestCase):
             reopened = JsonAuditObjectStore(directory)
             self.assertEqual(reopened.require("image-1"), b"image")
             self.assertEqual(reopened.require("large-1"), {"large": "x" * 100})
+            self.assertTrue((reopened.artifact_directory / "image-1.bin").is_file())
 
     def test_environment_factory_defaults_to_memory_and_can_enable_audit(self):
         original = os.environ.pop("GUI_AUDIT_DIR", None)

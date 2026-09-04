@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import base64
+import hashlib
 import json
 import os
 import re
@@ -69,13 +69,16 @@ class JsonAuditObjectStore(ObjectStore):
         self.directory = _private_directory(directory) / "objects"
         self.directory.mkdir(mode=0o700, exist_ok=True)
         os.chmod(self.directory, 0o700)
+        self.artifact_directory = self.directory.parent / "artifacts"
+        self.artifact_directory.mkdir(mode=0o700, exist_ok=True)
+        os.chmod(self.artifact_directory, 0o700)
         self.retention_days = retention_days
         self.max_total_bytes = max_total_bytes
         self._prune()
 
     def put(self, value: Any, *, prefix: str = "object", object_ref: str | None = None) -> str:
         reference = super().put(value, prefix=prefix, object_ref=object_ref)
-        payload = self._audit_payload(value)
+        payload = self._audit_payload(reference, value)
         if payload is not None:
             self._write(reference, payload)
             self._prune()
@@ -90,23 +93,52 @@ class JsonAuditObjectStore(ObjectStore):
             return None
         with path.open("r", encoding="utf-8") as handle:
             envelope = json.load(handle)
-        return _from_audit_primitive(envelope.get("value"))
+        return _from_audit_primitive(envelope.get("value"), self.artifact_directory)
 
     def clear(self) -> None:
         super().clear()
         for path in self.directory.glob("*.json"):
             path.unlink()
+        for path in self.artifact_directory.glob("*.bin"):
+            path.unlink()
 
-    def _audit_payload(self, value: Any) -> bytes | None:
+    def _audit_payload(self, reference: str, value: Any) -> bytes | None:
         try:
             encoded = json.dumps(
-                {"schema_version": 1, "stored_at": utc_now(), "value": _to_audit_primitive(value)},
+                {
+                    "schema_version": 1,
+                    "stored_at": utc_now(),
+                    "value": self._to_audit_primitive(reference, value, [0]),
+                },
                 ensure_ascii=False,
                 separators=(",", ":"),
             ).encode("utf-8")
         except (TypeError, ValueError):
             return None
         return encoded
+
+    def _to_audit_primitive(self, reference: str, value: Any, artifact_index: list[int]) -> Any:
+        value = to_primitive(value)
+        if isinstance(value, bytes):
+            suffix = "" if artifact_index[0] == 0 else f"-{artifact_index[0]}"
+            artifact_index[0] += 1
+            artifact_ref = f"{reference}{suffix}"
+            self._write_artifact(artifact_ref, value)
+            return {
+                "__audit_artifact__": {
+                    "path": f"artifacts/{artifact_ref}.bin",
+                    "bytes": len(value),
+                    "sha256": hashlib.sha256(value).hexdigest(),
+                }
+            }
+        if isinstance(value, dict):
+            return {
+                str(key): self._to_audit_primitive(reference, item, artifact_index)
+                for key, item in value.items()
+            }
+        if isinstance(value, list):
+            return [self._to_audit_primitive(reference, item, artifact_index) for item in value]
+        return value
 
     def _write(self, reference: str, payload: bytes) -> None:
         destination = self._path(reference)
@@ -129,19 +161,53 @@ class JsonAuditObjectStore(ObjectStore):
             raise ValueError("invalid object reference for audit store")
         return self.directory / f"{reference}.json"
 
+    def _write_artifact(self, reference: str, payload: bytes) -> None:
+        if not _SAFE_REFERENCE.fullmatch(reference):
+            raise ValueError("invalid artifact reference for audit store")
+        destination = self.artifact_directory / f"{reference}.bin"
+        if destination.exists():
+            return
+        descriptor, temporary = tempfile.mkstemp(prefix=".artifact-", dir=self.artifact_directory)
+        try:
+            os.fchmod(descriptor, 0o600)
+            with os.fdopen(descriptor, "wb") as handle:
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, destination)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+
     def _prune(self) -> None:
-        files = sorted(self.directory.glob("*.json"), key=lambda item: item.stat().st_mtime)
+        files = self._audit_files()
         cutoff = time.time() - self.retention_days * 86400
         for path in files:
             if path.stat().st_mtime < cutoff:
-                path.unlink()
-        files = sorted(self.directory.glob("*.json"), key=lambda item: item.stat().st_mtime)
+                self._remove_audit_file(path)
+        files = self._audit_files()
         total = sum(path.stat().st_size for path in files)
         for path in files:
             if total <= self.max_total_bytes:
                 break
             total -= path.stat().st_size
-            path.unlink()
+            self._remove_audit_file(path)
+
+    def _audit_files(self) -> list[Path]:
+        return sorted(
+            [*self.directory.glob("*.json"), *self.artifact_directory.glob("*.bin")],
+            key=lambda item: item.stat().st_mtime,
+        )
+
+    def _remove_audit_file(self, path: Path) -> None:
+        sibling = (
+            self.artifact_directory / f"{path.stem}.bin"
+            if path.parent == self.directory
+            else self.directory / f"{path.stem}.json"
+        )
+        path.unlink()
+        if sibling.exists():
+            sibling.unlink()
 
 
 def _private_directory(directory: str | Path) -> Path:
@@ -154,22 +220,19 @@ def _private_directory(directory: str | Path) -> Path:
     return path
 
 
-def _to_audit_primitive(value: Any) -> Any:
-    value = to_primitive(value)
-    if isinstance(value, bytes):
-        return {"__audit_bytes__": base64.b64encode(value).decode("ascii")}
+def _from_audit_primitive(value: Any, artifact_directory: Path) -> Any:
+    if isinstance(value, dict) and set(value) == {"__audit_artifact__"}:
+        metadata = value["__audit_artifact__"]
+        relative_path = metadata.get("path") if isinstance(metadata, dict) else None
+        if not isinstance(relative_path, str) or not relative_path.startswith("artifacts/"):
+            raise ValueError("invalid archived artifact reference")
+        path = artifact_directory / Path(relative_path).name
+        payload = path.read_bytes()
+        if hashlib.sha256(payload).hexdigest() != metadata.get("sha256"):
+            raise ValueError("archived artifact checksum mismatch")
+        return payload
     if isinstance(value, dict):
-        return {str(key): _to_audit_primitive(item) for key, item in value.items()}
+        return {key: _from_audit_primitive(item, artifact_directory) for key, item in value.items()}
     if isinstance(value, list):
-        return [_to_audit_primitive(item) for item in value]
-    return value
-
-
-def _from_audit_primitive(value: Any) -> Any:
-    if isinstance(value, dict) and set(value) == {"__audit_bytes__"}:
-        return base64.b64decode(value["__audit_bytes__"])
-    if isinstance(value, dict):
-        return {key: _from_audit_primitive(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_from_audit_primitive(item) for item in value]
+        return [_from_audit_primitive(item, artifact_directory) for item in value]
     return value
