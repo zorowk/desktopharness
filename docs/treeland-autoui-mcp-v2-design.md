@@ -1,14 +1,14 @@
-# Treeland AutoUI MCP v2 设计提案
+# Treeland AutoUI MCP v2：跨合成器设计提案
 
 ## 1. 目标与适用范围
 
-本设计用于重新划分主控、MCP 确定性逻辑层和 Qwen-CUA 图形识别层的职责，使三者能够协作完成安全、可验证的桌面操作。
+本设计用于重新划分主控、MCP 确定性逻辑层和 Qwen-CUA 图形识别层的职责，使三者能够协作完成安全、可验证的桌面操作。v2 的核心协议不绑定 Treeland：任何能提供窗口树和光标位置的合成器都可以接入；Treeland 只是第一个适配器实现。
 
 本文描述目标架构，不表示相关接口已经全部实现。现有 `qwen_cua_predict`、`qwen_cua_execute`、`qwen_cua_reset` 和 `qwen_cua_status` 在迁移期间继续保留。
 
 需要解决的主要问题：
 
-1. 主控可能误用 Tree 信息，例如将 `BackgroundContainer` 理解为“没有可点击控件”。
+1. 主控可能误用窗口树信息，例如将某个桌面容器理解为“没有可点击控件”。
 2. Qwen 的自然语言观察、动作提案和完成判断容易被混为界面事实。
 3. MCP 可以确定窗口、坐标、遮挡和执行状态，但不能据此判断窗口内部控件语义和业务结果。
 4. Qwen 的历史动作、自述状态、当前截图和真实执行结果可能发生分歧。
@@ -16,17 +16,206 @@
 
 核心原则：
 
-> Qwen 提出它认为正确的动作；Tree 只提供窗口级事实；主控提供任务目标、风险策略和断言；不同 Evidence Provider 只采集证据，Assertion Evaluator 根据证据判断断言，Task State Reducer 决定任务状态。
+> Qwen 提出它认为正确的动作；合成器适配器只提供窗口级空间事实；主控提供任务目标、风险策略和断言；不同 Evidence Provider 只采集证据，Assertion Evaluator 根据证据判断断言，Task State Reducer 决定任务状态。
+
+### 1.1 架构宪法：小核心、大扩展、克制通信
+
+以下规则是 v2 的核心设计，后续实现和功能扩充不得绕过：
+
+1. 核心协议只依赖自己的 Canonical Model，不依赖 Treeland、Deepin、Qwen、PyAutoGUI、`dde-am` 或其他具体实现。
+2. 合成器提供的原始数据必须经过 Adapter 映射和过滤；只有核心定义的有限标准字段可以进入正常链路。
+3. 合成器的额外字段默认丢弃。只对诊断有价值的完整原始数据保存为 `raw_artifact_ref`，不直接进入主控或模型上下文。
+4. 核心运行时对象保持为 `AdapterDescriptor`、`CanonicalSnapshot`、`ActionProposal`、`PolicyDecision`、`ExecutionReceipt` 和 `AssertionResult`。TaskContract 是主控输入，EvidenceRecord 是 provider 的标准输出，Ledger 只保存这些对象的引用。
+5. 所有真实动作都使用同一个单动作事务：`observe → propose → decide → execute → observe → collect evidence → evaluate`。
+6. Qwen 点击、键盘输入、平台快捷键和应用启动都必须形成 `ActionProposal`，经过相同的权限、策略、执行回执和结果验证流程。
+7. 组件只由薄 Orchestrator 调度，组件之间不得互相直接调用；正常通信只传决策所需的最小字段和对象引用。
+8. `unknown`、字段缺失、provider 不可用和动作未执行都不能被解释为 `false`、失败或成功。
+9. 新增合成器、模型、执行器、应用启动器或 Evidence Provider 时，原则上只增加 Adapter/Provider，不修改核心状态机。
+10. 只有同时服务于动作安全、坐标融合或结果验证，具有稳定可测试语义，并且至少一个核心流程实际消费的事实，才允许进入 Canonical Model。
+11. `based_on_snapshot` 只记录 Proposal 来源；执行有效性由控制层生成的 ProposalGuard 决定，禁止用完整 Snapshot 是否相等代替 Guard 检查。
+12. `semantic_intent` 只是模型 claim；PolicyDecision 必须基于可追溯的 Semantic Resolution，不能把模型意图直接当作策略真值。
+
+核心不是一个掌握所有桌面知识的“大脑”，而是一个小型动作事务内核：
+
+```text
+CanonicalSnapshot
+  → ActionProposal
+  → PolicyDecision
+  → ExecutionReceipt
+  → AssertionResult
+```
+
+PerceptionClaim、模型思考过程、完整 Assessment、原始树、截图和详细 trace 都属于诊断或 Context Builder 输入，不应扩大正常执行协议。
 
 ## 2. 三层职责
 
 | 层 | 负责 | 不负责 |
 | --- | --- | --- |
-| 主控 | 定义任务、风险、允许动作和验收条件；决定执行、确认、重试或停止 | 不计算坐标；不从 Tree 猜控件语义；不把 Qwen 自述当作界面真值 |
-| MCP 逻辑层 | 截图、Tree、坐标、窗口层级、遮挡、陈旧提案、执行、状态机和验证编排 | 不判断按钮文字、桌面图标语义或任务是否在视觉上“看起来完成” |
+| 主控 | 定义任务、风险、允许动作和验收条件；决定执行、确认、重试或停止 | 不计算坐标；不从窗口树猜控件语义；不把 Qwen 自述当作界面真值 |
+| MCP 逻辑层 | 截图、合成器窗口事实、坐标、窗口层级、遮挡、陈旧提案、执行、状态机和验证编排 | 不判断按钮文字、桌面图标语义或任务是否在视觉上“看起来完成” |
 | Qwen-CUA | 从截图理解界面，提出下一步鼠标/键盘动作，输出自己声称观察到的内容 | 不直接执行；不决定安全性；不作为最终验收器；不替代确定性坐标和遮挡计算 |
 
-### 2.1 平台能力目录：主控知道系统规则，Qwen 处理视觉剩余部分
+### 2.1 组件和依赖方向
+
+```text
+Controller
+    │ TaskContract
+    ▼
+Core Orchestrator ──────────────────────────────────────────┐
+    │                                                       │
+    ├── CompositorAdapter  → CanonicalSnapshot              │
+    ├── FrameProvider      → FrameReference                 │
+    ├── ProposalProvider   → ActionProposal                 │
+    ├── PolicyProvider     → PolicyDecision                 │
+    ├── InputExecutor      → ExecutionReceipt               │
+    ├── ApplicationLauncher→ ExecutionReceipt               │
+    ├── CapabilityProvider → platform capabilities          │
+    └── EvidenceProvider   → EvidenceRecord                 │
+                                                            ▼
+                                             AssertionEvaluator
+                                                    │
+                                                    ▼
+                                             AssertionResult
+```
+
+组件只实现 port，不互相调用。禁止形成 `ProposalProvider → Executor`、`Executor → ProposalProvider`、`CompositorAdapter → Qwen` 或 `EvidenceProvider → TaskState` 等隐藏链路。
+
+建议代码依赖方向：
+
+```text
+core/
+  models.py
+  orchestrator.py
+  action_gate.py
+  assertion_evaluator.py
+  task_state.py
+  ledger.py
+
+ports/
+  compositor.py
+  frame.py
+  proposal.py
+  executor.py
+  evidence.py
+  policy.py
+  platform_capability.py
+  application_launcher.py
+
+adapters/
+  compositor/treeland.py
+  proposal/qwen_cua.py
+  executor/pyautogui.py
+  platform/deepin_keybindings.py
+  platform/dde_am.py
+  evidence/compositor_window.py
+```
+
+依赖规则固定为：`adapters → ports/core models`、`core → ports`，核心不能 import 任何 adapter。
+
+### 2.2 CompositorAdapter：跨合成器的空间事实边界
+
+v2 不把 `treeland-debug --tree` 作为协议前提，而定义合成器适配器。最小可接入条件只有窗口树与光标位置；截图和输入注入可以由同一适配器或独立 provider 提供。
+
+```text
+CompositorAdapter
+├── get_window_tree()        # 必需：当前顶层窗口/容器树
+├── get_cursor_position()    # 必需：当前桌面坐标中的光标位置
+├── get_desktop_geometry()   # 必需：输出区域、原点和缩放/坐标空间
+├── hit_test(point)          # 可选：目标点的顶层命中结果
+├── is_above(a, b)           # 可选：局部 stacking relation
+└── occluded(window, region) # 可选：目标区域遮挡状态
+
+FrameProvider               # 可由 CompositorAdapter 实现
+└── capture_frame()
+
+InputExecutor                # 可由 CompositorAdapter 或独立后端实现
+└── inject(pointer / keyboard)
+```
+
+不同合成器的原始 tree 必须先归一化成 `CanonicalSnapshot` 与 `CanonicalWindowFact`，MCP 的融合、PolicyDecision、Evidence 和 Assertion 都只依赖此结构：
+
+```json
+{
+  "schema_version": "1",
+  "snapshot_id": "snapshot-42",
+  "captured_at": "2026-09-04T10:00:00Z",
+  "environment_version": "sha256:...",
+  "coordinate_space": {
+    "id": "desktop-logical",
+    "bounds": {"x": 0, "y": 0, "width": 1920, "height": 1080}
+  },
+  "outputs": [
+    {
+      "output_id": "eDP-1",
+      "geometry": {"x": 0, "y": 0, "width": 1920, "height": 1080},
+      "scale": null
+    }
+  ],
+  "cursor": {"x": 960, "y": 540},
+  "windows": [
+    {
+      "window_id": "stable-compositor-id",
+      "app_id": "optional.app.id",
+      "title": "optional title",
+      "geometry": {"x": 0, "y": 0, "width": 800, "height": 600},
+      "visible": true,
+      "active": true,
+      "z_index": null,
+      "workspace_id": "optional-workspace-id",
+      "output_id": "eDP-1",
+      "role": "normal"
+    }
+  ],
+  "raw_artifact_ref": "artifact-42"
+}
+```
+
+`environment_version` 用于观察关联、变更检测和审计，不是 ProposalGuard。它可以因任何 Snapshot 内容变化而变化，Core 禁止直接使用 `environment_version` 不相等判定 Proposal 失效。
+
+CanonicalWindowFact 只允许 `window_id`、`app_id`、`title`、`geometry`、`visible`、`active`、可选 `z_index`、`workspace_id`、`output_id` 和 `role`。`role` 使用 `normal`、`desktop`、`panel`、`overlay`、`lockscreen`、`dialog` 或 `unknown`。不设计可以携带任意合成器字段的通用 `extensions`。
+
+`window_id` 需要在适配器声明的稳定范围内有效，`app_id`、标题、工作区和 role 均可缺失。适配器必须同时报告自身能力，不能把字段缺失伪装为否定事实：
+
+```json
+{
+  "adapter_id": "treeland",
+  "capabilities": {
+    "window_tree": true,
+    "cursor_position": true,
+    "desktop_geometry": true,
+    "stacking": {
+      "model": "hit-test",
+      "z_index": "best-effort",
+      "is_above": false,
+      "occlusion": true
+    },
+    "active_window": true,
+    "workspace": true,
+    "window_identity": "best-effort",
+    "child_controls": false,
+    "window_text": false
+  }
+}
+```
+
+`z_index` 不是跨合成器必需能力。存在时只在当前 Snapshot 内表示 best-effort 顺序，不要求跨 Snapshot 稳定，也不能让 Core 假设它构成完美全序。Adapter 的 stacking model 使用固定枚举：`total-order`、`partial-order`、`hit-test`、`topmost-only` 或 `unavailable`。
+
+安全检查优先使用 Adapter 可提供的标准查询：
+
+```text
+hit_test(point)
+topmost_window_at(point)
+is_above(window_a, window_b)
+occluded(window_id, region)
+```
+
+点击操作真正依赖的是目标点当前命中了哪个顶层窗口，而不是所有窗口都有全局整数 `z_index`。只有 Adapter 声明 `total-order` 时，Core 才能用 z 顺序推导任意窗口间关系；能力不足时相关结论必须为 `unknown`。
+
+仅有窗口树和光标位置时，系统仍能可靠完成坐标转换、窗口归属、顶层/遮挡判断、陈旧提案检测、窗口出现/消失和活动窗口验证；它不能据此断言窗口内部按钮、文本、桌面图标、输入焦点或业务结果。后者必须使用截图/Qwen、AT-SPI、DOM、OCR、剪贴板、文件系统或应用 API 的独立 evidence。
+
+Treeland 的实现是：`TreelandAdapter → CanonicalSnapshot`，其 transport 目前为 `treeland-debug --tree`。它的 `BackgroundContainer` 只是 `role=desktop` 的一个实现细节，不能进入跨合成器协议或被解释为“没有桌面图标”。
+
+### 2.3 平台能力目录：主控知道系统规则，Qwen 处理视觉剩余部分
 
 “打开应用”不能完全依赖 Qwen 从截图猜桌面图标或记忆快捷键。Deepin 已提供可读取的默认快捷键 schema，以及 `dde-am` 的按应用 ID 启动接口；它们应由 MCP 作为平台能力提供给主控，而不是以原始 shell 命令的形式交给模型。
 
@@ -37,7 +226,7 @@
 | `desktop_capabilities_list` | 查询 Deepin 默认快捷键、启用状态、风险和控制器策略 | 不返回 schema 的原始命令/DBus trigger value |
 | `desktop_shortcut_invoke` | 调用经控制器批准的低风险能力 | 仅接受稳定 `capability_id`；不接受任意按键或命令 |
 | `desktop_applications_list` | 从 desktop entry 解析可发现应用的 `app_id` | 不返回 `.desktop` 的 `Exec` 字段 |
-| `desktop_application_launch` | 用 `dde-am <app_id>` 启动应用并采集 Tree evidence | 仅接受纯应用 ID；拒绝路径、URI、选项和 `dde-am -c` |
+| `desktop_application_launch` | 用 `dde-am <app_id>` 启动应用并采集 compositor-window evidence | 仅接受纯应用 ID；拒绝路径、URI、选项和 `dde-am -c` |
 
 当前系统默认 schema 的关键事实为：
 
@@ -57,6 +246,8 @@
 
 这不会把 Qwen 排除在流程外：Qwen 仍处理没有系统 API 的视觉界面；只是“系统如何打开 Launcher”与“哪个桌面图标是编辑器”不再由它猜测。
 
+这些工具是迁移期 adapter facade，不是核心 API：Deepin 快捷键实现 `PlatformCapabilityProvider`，`dde-am` 实现 `ApplicationLauncher`。它们执行前必须生成 `platform.invoke` 或 `application.launch` Proposal，不能旁路单动作事务。
+
 `/usr/share/dsg/configs/org.deepin.dde.keybinding` 是默认 schema，不是用户运行时设置的证明。目录结果必须标为 `source=default-schema`；接入 DConfig 或 D-Bus 有效配置查询后，才可以标为 `runtime-verified`。目录中即使 `enabled=true`，也不代表可自动执行：锁屏、注销、关机、关闭窗口等仍由 `controller-policy` 拒绝或要求用户确认。
 
 ## 3. 总体流程
@@ -68,49 +259,41 @@
   ▼
 MCP Observation
   │
-  │ 2. ObservationFrame：当前截图 + Tree 窗口事实
+  │ 2. CanonicalSnapshot + FrameReference
   ▼
-Context Builder ◀──────────────────────────── Event Ledger
+ProposalProvider / Controller
   │
-  │ 3. ModelContext：TaskContract 投影 + 当前截图
-  │    + VerifiedStateProjection + RelevantLedgerProjection
-  │    不包含原始完整 Tree 或未经标记的历史
+  │ 3. ActionProposal：一个动作、snapshot_id、意图和预期效果
   ▼
-Qwen-CUA
+Action Gate
   │
-  │ 4. PerceptionClaim：模型声称看到了什么
-  │    ActionIntent：模型下一步想达到什么目的
-  │    ActionProposal：模型建议如何操作
+  │ 4. Semantic Resolution + ProposalGuard + PolicyDecision
   ▼
-MCP Assessment
+InputExecutor / ApplicationLauncher
   │
-  │ 5. 白名单、坐标、顶层容器、遮挡、陈旧性、风险检查
+  │ 5. 重检 Guard；允许后产生 ExecutionReceipt
   ▼
-主控策略
+MCP Observation
   │
-  │ 6. execute / needs-confirmation / reject
-  ▼
-Executor
-  │
-  │ 7. ExecutionEffect：请求动作、实际动作和真实副作用
+  │ 6. 新 CanonicalSnapshot
   ▼
 Evidence Providers
   │
-  │ 8. Evidence Collection：API、文件、进程、窗口、AT-SPI、OCR 等证据
+  │ 7. Evidence Collection：API、文件、进程、窗口、AT-SPI、OCR 等证据
   ▼
 Assertion Evaluator
   │
-  │ 9. Assertion Evaluation：用证据评价 TaskContract 断言
+  │ 8. AssertionResult：用证据评价 TaskContract 断言
   ▼
 Task State Reducer
   │
-  │ 10. Task State Transition：continue / retry / completed / failed
+  │ 9. Task State Transition：continue / retry / completed / failed
   ▼
 Event Ledger
-     11. 追加不可变审计事件；下一轮由 Context Builder 重新投影
+     10. 只追加对象引用；需要模型时由 Context Builder 构造投影
 ```
 
-Qwen 的直接输入是 `ModelContext`，不是原始完整 Tree、完整 Ledger 或未经筛选的对话历史。`ObservationFrame` 和 Ledger 先由 MCP 解释、校验和投影，再交给模型。
+Qwen 只是 ProposalProvider 的一种实现。需要 Qwen 时，Context Builder 使用 CanonicalSnapshot、FrameReference、TaskContract 和 Ledger 引用构造最小 ModelContext；控制器直接发起的 `application.launch` 或 `platform.invoke` 不需要经过模型。
 
 以下八个概念必须保持分离：
 
@@ -127,121 +310,50 @@ Qwen 的直接输入是 `ModelContext`，不是原始完整 Tree、完整 Ledger
 
 ## 4. TaskContract：主控定义任务契约
 
-主控不再用一段自然语言同时表达目标、安全边界和验收规则，而是生成结构化任务契约。TaskContract 将“物理输入授权”和“业务语义策略”分开，因为 `click`、`write` 或 `hotkey` 本身不包含风险含义；风险取决于动作作用的对象、意图和效果。
+主控不再用一段自然语言同时表达目标、安全边界和验收规则，而是生成小型结构化任务契约。正常调用只携带目标、正向授权、断言、运行限制和策略引用；完整策略定义由 `policy_profile` 管理，不在每轮消息中重复展开。
 
 还必须区分：
 
 ```text
 MCP capabilities：系统技术上能够做什么
-Task mechanical_permissions：本次任务授权使用哪些输入机制
-Task semantic_policy：本次任务允许这些输入产生什么业务效果
+Task action permissions：本次任务授权哪些标准动作
+Policy profile：本次任务允许这些动作产生什么业务效果
 ```
 
-MCP capabilities 由 `describe` 返回，不由 TaskContract 声明。TaskContract 只授权系统能力的一个子集。
+MCP capabilities 由注册表返回，不由 TaskContract 声明。TaskContract 只授权系统能力的一个子集。
 
 ```json
 {
   "task_id": "open-text-editor",
-  "goal": "打开一个新的空白文本编辑器文档",
-  "mechanical_permissions": {
-    "pointer": {
-      "move": true,
-      "click": true,
-      "double_click": true,
-      "drag": false,
-      "scroll": false
-    },
-    "keyboard": {
-      "text_input": false,
-      "keys": [],
-      "shortcuts": []
-    }
+  "goal": "打开文本编辑器",
+  "permissions": {
+    "actions": [
+      "application.launch",
+      "pointer.click",
+      "keyboard.text"
+    ],
+    "semantic_intents": [
+      "open_application",
+      "content_edit"
+    ]
   },
-  "semantic_policy": {
-    "navigation": "allow",
-    "open_application": "allow",
-    "content_edit": "confirm",
-    "settings_change": "confirm",
-    "external_side_effect": "confirm",
-    "destructive": "deny",
-    "authentication": "deny",
-    "unknown": "confirm"
-  },
-  "runtime_limits": {
-    "max_steps": 5,
-    "max_retries": 2
-  },
-  "required_postconditions": [
+  "assertions": [
     {
       "assertion_id": "editor-opened",
-      "expression": {
-        "path": "active_window.app_id",
-        "operator": "equals",
-        "expected": "deepin-editor"
-      },
-      "evidence_policy": {
-        "allowed_providers": ["treeland-window", "process"],
-        "preferred_providers": ["treeland-window"],
-        "allow_model_claim_only": false
-      }
+      "path": "active_window.app_id",
+      "operator": "equals",
+      "expected": "deepin-editor"
     }
-  ]
+  ],
+  "limits": {"max_steps": 5, "max_retries": 1},
+  "policy_profile": "desktop-safe-default",
+  "verification_profile": "application-open"
 }
 ```
 
-用于代码验收时，可定义更严格的契约：
+`policy_profile` 引用机械权限之外的详细语义规则，`verification_profile` 引用 provider 允许列表、优先级和冲突策略。需要覆盖默认值时才在任务中增加小型 override。迁移期可把旧的 `{"type": "active_window", ...}` 等 postcondition 编译为上述 assertion 结构。每个必要断言必须具有稳定 `assertion_id` 和可执行表达式。
 
-```json
-{
-  "goal": "验证提交按钮可以创建一条记录",
-  "mechanical_permissions": {
-    "pointer": {
-      "move": true,
-      "click": true,
-      "double_click": false,
-      "drag": false,
-      "scroll": true
-    },
-    "keyboard": {
-      "text_input": true,
-      "keys": ["enter", "tab", "escape"],
-      "shortcuts": []
-    }
-  },
-  "semantic_policy": {
-    "navigation": "allow",
-    "content_edit": "allow",
-    "external_side_effect": "confirm",
-    "destructive": "deny",
-    "unknown": "confirm"
-  },
-  "runtime_limits": {
-    "max_steps": 12,
-    "max_retries": 2
-  },
-  "required_postconditions": [
-    {
-      "assertion_id": "record-created",
-      "expression": {"path": "api.status", "operator": "equals", "expected": 201},
-      "evidence_policy": {"preferred_providers": ["application-api"]}
-    },
-    {
-      "assertion_id": "success-visible",
-      "expression": {"path": "dom.text", "operator": "contains", "expected": "创建成功"},
-      "evidence_policy": {"preferred_providers": ["dom"]}
-    },
-    {
-      "assertion_id": "test-process-passed",
-      "expression": {"path": "process.exit_code", "operator": "equals", "expected": 0},
-      "evidence_policy": {"preferred_providers": ["process"]}
-    }
-  ]
-}
-```
-
-迁移期可把旧的 `{"type": "active_window", ...}` 等 postcondition 编译为上述 assertion 结构。新协议中每个必要断言必须具有稳定 `assertion_id`、可执行表达式和 evidence policy；如果没有声明 provider 优先级，则使用第 11 节的默认冲突规则。
-
-机械权限采用正向授权：未授权即禁止，不再同时维护 `allowed_actions` 和 `forbidden_actions`，避免规则交叉。
+动作权限采用正向授权：未授权即禁止，不再同时维护 `allowed_actions` 和 `forbidden_actions`，避免规则交叉。
 
 语义策略的值固定为 `allow`、`confirm` 或 `deny`。一个动作可以同时命中多个语义标签，最终决策采用固定优先级：
 
@@ -253,88 +365,75 @@ deny > confirm > allow
 
 任务契约属于主控责任，Qwen 不能自行修改机械权限、语义策略、运行限制或验收条件。
 
-## 5. ObservationFrame：传感器事实
+## 5. CanonicalSnapshot 与 FrameReference
 
-每次观察生成不可变 Frame：
+每次决策前由 CompositorAdapter 生成新的不可变 `CanonicalSnapshot`。其标准结构见第 2.2 节；核心不读取合成器原始 tree。所有 Proposal 必须引用产生它时使用的 `snapshot_id`，但该引用只表示 provenance：记录 Proposal 基于哪次观察产生，不直接决定执行有效性。
+
+Snapshot identity 不等于 Proposal validity。执行前出现新的 Snapshot 时，核心必须重新检查第 7.1 节的 ProposalGuard；只有动作所依赖的条件失效才拒绝。无关光标移动、标题刷新、时钟变化、动画或不影响目标的窗口变化不能使绝对坐标动作自动 stale。
+
+截图不是合成器最低契约，由独立 FrameProvider 产生：
 
 ```json
 {
   "frame_id": "frame-123",
-  "captured_at": "...",
-  "screenshot": {
-    "sha256": "...",
-    "width": 1920,
-    "height": 1080
-  },
-  "desktop": {
-    "bounds": {"x": 0, "y": 0, "width": 1920, "height": 1080}
-  },
-  "top_level_containers": [
-    {
-      "app_id": "",
-      "title": "",
-      "container": "BackgroundContainer",
-      "geometry": {},
-      "layer": -2,
-      "z": 0,
-      "visible": true
-    }
-  ]
-}
-```
-
-协议必须显式声明 Tree 的能力边界：
-
-```json
-{
-  "tree_capabilities": {
-    "window_geometry": true,
-    "stacking_order": true,
-    "visibility": true,
-    "workspace": true,
-    "child_controls": false,
-    "desktop_icons": false,
-    "window_text": false,
-    "control_semantics": false
+  "captured_at": "2026-09-04T10:00:00Z",
+  "image_ref": "image-123",
+  "pixel_size": {"width": 1920, "height": 1080},
+  "coordinate_mapping": {
+    "from": "frame-pixel",
+    "to": "desktop-logical",
+    "transform_ref": "transform-123"
   }
 }
 ```
 
-Tree 只用于顶层窗口/容器的几何、层级、可见性、工作区、遮挡和坐标命中。`BackgroundContainer` 可以包含可点击桌面图标，不能据容器类型判断图标或控件是否存在。
+截图可以来自合成器接口、portal、PipeWire、PyAutoGUI 或测试夹具。空间融合只能使用显式坐标变换，不能假定截图像素与桌面逻辑坐标相同。
 
-## 6. Qwen 输出的概念拆分
+CompositorAdapter 只提供顶层窗口/容器的几何、层级、可见性、工作区、遮挡和坐标命中事实。桌面 role 可以包含可点击图标，不能据 role 或容器类型判断图标、控件、输入焦点或内容是否存在。
 
-Qwen 的单轮输出在逻辑上必须拆成 `PerceptionClaim`、`ActionIntent`、`ActionProposal` 和 `ModelExpectation`。实现上可以继续使用一个 JSON 对象，但字段含义和故障责任必须独立。
+## 6. ProposalProvider 与 Qwen 诊断输出
+
+Qwen-CUA 是一个 ProposalProvider，不是核心依赖。进入核心的只有一个 `ActionProposal`；`PerceptionClaim`、详细 ActionIntent、ModelExpectation 和模型原始输出保存到 `debug_ref`，用于模型评测、归因和 Context Builder，不在正常组件通信中重复传递。
 
 ```json
 {
+  "schema_version": "1",
   "proposal_id": "proposal-123",
-  "frame_id": "frame-123",
-  "model": "qwen3_rl",
-  "perception_claim": {
-    "observation_text": "I can see a Text Editor icon",
-    "objects": [
-      {
-        "label": "Text Editor icon",
-        "region": [120, 250, 150, 290]
-      }
-    ]
+  "source": "qwen-cua",
+  "based_on_snapshot": "snapshot-123",
+  "action": {
+    "type": "pointer.click",
+    "coordinate": {
+      "space": "desktop-logical",
+      "x": 136,
+      "y": 273
+    }
   },
-  "action_intent": {
-    "goal": "open Text Editor",
-    "target": "Text Editor desktop icon"
+  "semantic_intent": "open_application",
+  "expected_effect": {
+    "active_app_id": "deepin-editor"
   },
-  "action_proposal": {
-    "type": "click",
-    "screenshot_coordinate": [136, 273]
-  },
-  "model_expectation": {
-    "active_window_app_id": "deepin-editor"
-  },
-  "completion_claim": false,
-  "raw_output": "..."
+  "debug_ref": "model-output-123"
 }
 ```
+
+核心动作类型使用有限枚举：
+
+```text
+pointer.move
+pointer.click
+pointer.double_click
+pointer.drag
+pointer.scroll
+keyboard.key
+keyboard.shortcut
+keyboard.text
+platform.invoke
+application.launch
+done
+```
+
+平台快捷键和 `dde-am` 启动不是旁路。它们分别形成 `platform.invoke` 和 `application.launch` Proposal，同样经过 PolicyDecision、ExecutionReceipt 和 AssertionResult。
 
 ### 6.1 PerceptionClaim
 
@@ -375,65 +474,142 @@ action_effect: 未执行
 
 ### 6.4 ModelExpectation
 
-`model_expectation` 表示模型预测动作后会发生什么，仅用于诊断和后续反馈。它不能替代 TaskContract 中的 `required_postconditions`。
+`model_expectation` 表示模型预测动作后会发生什么，仅用于诊断和后续反馈。它不能替代 TaskContract 中的 `assertions`。
 
 必须保持：
 
 ```text
 model_expectation
-≠ required_postcondition
+≠ task_assertion
 ```
 
 前者由 Qwen 提出；后者由主控的 TaskContract 定义，并由 Assertion Evaluator 使用独立 evidence 判断。
 
-## 7. ActionAssessment：MCP 确定性裁决
+## 7. PolicyDecision：MCP 确定性裁决
 
-MCP 对动作提案返回独立评估：
+Action Gate 使用 TaskContract、当前 CanonicalSnapshot 和 ActionProposal 返回最小决策对象：
 
 ```json
 {
-  "assessment": {
-    "status": "eligible",
-    "mechanical_permission": {
-      "passed": true,
-      "capability": "pointer.click"
-    },
-    "coordinate_inside_desktop": true,
-    "top_level_target": {
-      "container": "BackgroundContainer"
-    },
-    "target_stable": true,
-    "frame_fresh": true,
-    "semantic_policy": {
-      "model_claimed_tags": ["open_application"],
-      "resolved_tags": ["open_application"],
-      "decision": "allow",
-      "decision_source": ["task-contract"]
-    }
-  },
-  "control_truth": {
-    "status": "unavailable",
-    "reason": "Treeland tree has no child-control semantics"
-  }
+  "schema_version": "1",
+  "proposal_id": "proposal-123",
+  "status": "allow",
+  "reason_code": "OK",
+  "resolved_target": {"window_id": "window-52"},
+  "guard_ref": "proposal-guard-123",
+  "semantic_resolution_ref": "semantic-resolution-123",
+  "debug_ref": "assessment-123"
 }
 ```
 
-`control_truth.status=unavailable` 仅表示 MCP 没有控件级真值，不表示：
+状态固定为 `allow`、`deny`、`confirm`、`invalid` 或 `stale`。正常链路不返回完整窗口树、候选窗口、模型输出和详细规则求值；这些材料由 `debug_ref` 指向。
+
+稳定拒绝码至少包括：`SNAPSHOT_UNAVAILABLE`、`UNSUPPORTED_ACTION`、`INVALID_COORDINATE_SPACE`、`OUTSIDE_DESKTOP`、`COORDINATE_SPACE_CHANGED`、`TARGET_NOT_FOUND`、`TARGET_DISAPPEARED`、`TARGET_IDENTITY_CHANGED`、`TARGET_GEOMETRY_INVALIDATED`、`TARGET_OCCLUDED`、`HIT_TEST_CHANGED`、`CURSOR_ORIGIN_CHANGED`、`CAPABILITY_UNAVAILABLE`、`MECHANICAL_PERMISSION_DENIED`、`SEMANTIC_POLICY_DENIED` 和 `CONFIRMATION_REQUIRED`。`STALE_SNAPSHOT` 只作为迁移期兼容总类，不能作为“两个 Snapshot 不相等”的直接结果。
+
+`CAPABILITY_UNAVAILABLE` 或控件事实为 `unknown` 仅表示 MCP 没有相应真值，不表示：
 
 - Qwen 没有看懂；
 - 图标不存在；
 - 动作错误；
 - 动作必须被拒绝。
 
-`BackgroundContainer` 上的低风险点击可以执行，只要：
+桌面 role 上的低风险点击可以执行，只要：
 
 - 坐标位于桌面内；
 - 执行前仍命中同一顶层容器；
 - 目标没有被其他窗口覆盖；
-- TaskContract 的机械权限允许 `pointer.click`；
+- TaskContract 的动作权限允许 `pointer.click`；
 - 解析出的语义标签经 policy 合并后结果为 `allow`。
 
-Qwen 可以在 `ActionIntent` 中给出语义标签，但它们仍属于模型自述。主控/MCP 的 `semantic_assessment` 必须明确区分 `model_claimed_tags` 和依据 TaskContract、界面真值或用户确认解析出的 `resolved_tags`。无法解析时使用 `unknown` 策略，不能默认为低风险。
+Qwen 可以给出 `semantic_intent`，但它仍属于模型提案。PolicyProvider 必须根据 TaskContract、平台能力语义和用户确认解析实际策略；无法解析时使用 `unknown` 策略，不能默认为低风险。
+
+### 7.1 ProposalGuard：执行有效性不是 Snapshot 相等性
+
+ProposalGuard 是 Action Gate 根据 ActionProposal、CanonicalSnapshot、TaskContract 和 Adapter capability 推导的控制层记录，不能由 Qwen 提供或修改。它不是新的任务生命周期阶段，只是 PolicyDecision 授权执行时引用的前置条件集合：
+
+```json
+{
+  "guard_id": "proposal-guard-123",
+  "proposal_id": "proposal-123",
+  "derived_from_snapshot": "snapshot-123",
+  "coordinate_space": {
+    "id": "desktop-logical",
+    "version": "geometry-7"
+  },
+  "target": {
+    "window_id": "window-52",
+    "identity_required": true,
+    "required_visible": true
+  },
+  "geometry": {
+    "expected": {"x": 100, "y": 100, "width": 800, "height": 600},
+    "policy": "point-must-remain-inside"
+  },
+  "hit_test": {
+    "point": [136, 273],
+    "required_target_window_id": "window-52"
+  }
+}
+```
+
+执行器接收 Proposal 和允许执行的 PolicyDecision 后，必须在产生输入副作用前用最新 CanonicalSnapshot 重检 `guard_ref`。Guard 只包含动作真实依赖的条件：
+
+- 绝对坐标点击通常依赖坐标空间、目标身份、可见性、点是否仍在目标内以及该点的顶层命中结果；
+- 相对移动或拖拽还可能依赖光标起点；
+- 窗口标题仅在它参与目标身份解析时才进入 Guard；
+- 无关窗口、无关标题、时钟、动画或不影响目标点的变化不进入 Guard。
+
+Guard 失效必须返回最具体的原因码，而不是笼统比较 Snapshot hash。`based_on_snapshot` 永远保留为来源引用，即使新 Snapshot 下 Guard 仍然成立。
+
+### 7.2 Semantic Resolution：模型意图不是策略真值
+
+策略求值前必须先解析动作语义：
+
+```text
+ActionProposal
+  → Semantic Resolution
+  → Policy Evaluation
+  → PolicyDecision
+```
+
+`ActionProposal.semantic_intent` 是 proposal claim，只能作为一个语义来源，不能单独升级为 policy truth。Semantic Resolution 汇总与动作对象相关的 semantic evidence：
+
+```json
+{
+  "semantic_resolution_id": "semantic-resolution-123",
+  "proposal_id": "proposal-123",
+  "status": "resolved",
+  "tags": [
+    {
+      "tag": "destructive",
+      "source": "atspi",
+      "evidence_ref": "evidence-81",
+      "confidence": "deterministic"
+    },
+    {
+      "tag": "delete_account",
+      "source": "qwen-claim",
+      "evidence_ref": "model-output-123",
+      "confidence": "model-claim"
+    }
+  ]
+}
+```
+
+语义来源按其自身证据质量处理：
+
+| 来源 | 示例 | 策略地位 |
+| --- | --- | --- |
+| PlatformCapability | `power.shutdown` | 确定性平台语义 |
+| 应用 API / DOM | `button.action=delete-account` | 高可信应用语义 |
+| AT-SPI | role 与 accessible name | 独立控件语义 evidence |
+| TaskContract | 当前测试步骤允许保存草稿 | 主控授权范围 |
+| Qwen | “这是删除按钮” | 模型 claim |
+| 只有坐标和窗口 | `click(x,y)` | `unknown` |
+
+没有独立 semantic evidence 时，系统不可能同时做到“不相信模型”与“自动理解任意 GUI 控件风险”。默认仍为 `unknown → confirm`；明确隔离的测试环境可以通过 policy profile 对特定应用、窗口或任务范围授权 `unknown → allow`，但必须是主控授权，不能由模型自行放宽。
+
+Semantic Resolution 可以作为 PolicyProvider 内部的标准步骤，不必扩展六个核心生命周期对象。PolicyDecision 通过 `semantic_resolution_ref` 保留可审计来源。
 
 ## 8. 执行资格与提案正确性分离
 
@@ -454,31 +630,28 @@ Qwen 可以在 `ActionIntent` 中给出语义标签，但它们仍属于模型�
 
 以点击桌面编辑器图标为例：
 
-- Tree 无法证明它是编辑器图标；
+- 窗口树无法证明它是编辑器图标；
 - 也不能否定模型声称的图标；
 - 点击本身低风险且窗口级安全时允许执行；
 - 点击后检查是否出现 `deepin-editor`。
 
-## 9. 统一状态信封
+## 9. 对外状态信封与最小通信
 
-借鉴本地 skills 的 compact facade，所有 MCP 操作统一返回：
+统一信封只用于 MCP 对外 facade，不用于内核组件之间通信。正常响应只返回状态和核心对象引用；详细 effect、evidence、attribution 和 metrics 按引用查询：
 
 ```json
 {
   "protocol_version": 2,
-  "status": "ok",
   "operation": "propose",
-  "data": {},
-  "effects": [],
-  "evidence": [],
-  "assertion_evaluation": {},
-  "task_state": {},
-  "attributions": [],
+  "status": "needs-execution",
+  "object_ref": "proposal-123",
   "error": null,
   "retry": null,
-  "metrics": {}
+  "debug_ref": null
 }
 ```
+
+只有调用方明确请求诊断时，才通过 `object_ref` 或 `debug_ref` 取得完整对象。组件之间直接传 typed object 或引用，禁止套用包含未使用字段的大信封。
 
 建议状态：
 
@@ -522,50 +695,42 @@ Qwen 返回 `DONE` 只能触发 Evidence Collection，不能直接产生 `comple
 
 `error` 描述当前操作为何没有完成，`attributions` 描述事件性质和责任归因；调用方不得从 `error` 的存在直接推导组件失败。例如上例是 MCP 正确发现环境变化后的安全拒绝，不计入 MCP 错误率。
 
-## 10. ExecutionEffect：实际执行与真实副作用
+## 10. ExecutionReceipt：执行器实际做了什么
 
-模型提案、批准动作、实际注入动作和真实副作用必须分开：
+模型提案、策略批准、实际注入和业务结果必须分开。执行器只返回最小回执：
 
 ```json
 {
-  "execution_effect": {
-    "requested_action": {
-      "type": "click",
-      "coordinate": [136, 273]
-    },
-    "approved_action": {
-      "type": "click",
-      "coordinate": [136, 273]
-    },
-    "executed_action": {
-      "type": "click",
-      "coordinate": [136, 273]
-    },
-    "status": "executor-reported-success",
-    "delivery_status": "unknown",
-    "effects": [
-      {
-        "type": "mouse_click",
-        "coordinate": [136, 273],
-        "executed": true,
-        "timestamp": "..."
-      }
-    ]
-  }
+  "schema_version": "1",
+  "execution_id": "execution-123",
+  "proposal_id": "proposal-123",
+  "status": "delivered",
+  "executed_action": {
+    "type": "pointer.click",
+    "coordinate": {
+      "space": "desktop-logical",
+      "x": 136,
+      "y": 273
+    }
+  },
+  "started_at": "...",
+  "finished_at": "...",
+  "error_code": null,
+  "debug_ref": null
 }
 ```
 
-当前输入接口返回成功，只能证明执行器已调用输入动作，不能证明应用收到动作或产生了模型预期的业务效果。`window_opened`、文本变化等后置结果必须由 Evidence Provider 另行采集，不能写进 `ExecutionEffect` 冒充执行事实。
+状态固定为 `delivered`、`rejected`、`failed` 或 `unknown`。`delivered` 只能证明执行后端接受并注入了动作，不能证明应用收到动作或产生了模型预期的业务效果。`window_opened`、文本变化等结果必须由 Evidence Provider 另行采集，不能写进 ExecutionReceipt 冒充执行事实。
 
 尤其必须保持：
 
 ```text
 ActionIntent: clear calculator
-≠ ExecutionEffect: click(420,610) was issued
+≠ ExecutionReceipt: click(420,610) was delivered
 ≠ AssertionResult: calculator_display_empty == passed
 ```
 
-因此 Context Builder 不得生成含糊字段 `previous_action: clear`。它必须分别投影模型意图、实际执行动作和断言结果；正常情况下只需向 Qwen 提供后两者，历史意图仅用于诊断。
+因此 Context Builder 不得生成含糊字段 `previous_action: clear`。它必须分别投影模型意图、ExecutionReceipt 和断言结果；正常情况下只需向 Qwen 提供后两者，历史意图仅用于诊断。
 
 如果 Qwen 提议的坐标本身偏离目标，属于 `qwen_grounding`；如果批准坐标正确但执行器注入到其他位置，属于 `mcp_executor`。
 
@@ -573,8 +738,7 @@ ActionIntent: clear calculator
 
 ```json
 {
-  "proposal": {"action": "click"},
-  "effects": [],
+  "proposal_id": "proposal-123",
   "status": "needs-execution"
 }
 ```
@@ -597,23 +761,40 @@ Evidence Collection
 
 1. 应用 API、测试退出码、数据库、文件系统和进程状态；
 2. DOM、AT-SPI、D-Bus 和剪贴板；
-3. Treeland 窗口 `appId/title`、层级和位置；
+3. CompositorAdapter 的窗口 `appId/title`、层级、位置和光标位置；
 4. 独立 OCR 或人工标注；
 5. Qwen 对截图的重新观察。
 
-上述顺序是默认可信度参考，不是对所有断言都适用的固定全局排序。TaskContract 应为关键断言声明允许的 provider 和优先级。例如文件内容断言应优先使用文件系统，而不是窗口标题。
+上述顺序是默认可信度参考，不是对所有断言都适用的固定全局排序。`verification_profile` 为断言声明允许的 provider、优先级和冲突规则。例如文件内容断言应优先使用文件系统，而不是窗口标题。
+
+Provider 只能声明由核心注册表定义的标准 fact path：
+
+```json
+{
+  "provider_id": "compositor-window",
+  "provides": [
+    "active_window.app_id",
+    "active_window.window_id",
+    "window.geometry",
+    "cursor.position"
+  ]
+}
+```
+
+系统可以自动发现、注册和按断言选择 provider，但字段语义映射必须由 Adapter 明确定义。原始 provider 数据不能自动扩展 fact path；无法映射的字段丢弃或仅保存为 `raw_artifact_ref`。
 
 统一 Evidence 结构：
 
 ```json
 {
+  "schema_version": "1",
   "evidence_id": "evidence-42",
-  "provider": "treeland-window",
+  "provider": "compositor-window",
   "collected_at": "2026-09-02T10:20:31Z",
   "subject": {
     "display_id": 0,
     "window_id": 184,
-    "frame_id": "frame-123"
+    "snapshot_id": "snapshot-123"
   },
   "facts": {
     "active_app_id": "deepin-editor",
@@ -705,13 +886,13 @@ Qwen 的 `DONE`、动作成功和单个断言通过都不能直接修改任务�
 
 ```text
 model_expectation
-≠ required_postcondition
+≠ task_assertion
 ≠ evidence
 ≠ assertion_result
 ≠ task_state
 ```
 
-`model_expectation` 用于评价模型是否正确预测动作效果；`required_postcondition` 是主控定义的验收规则；`evidence` 是 provider 取得的材料；`assertion_result` 是 evaluator 的判断；`task_state` 是 reducer 产生的状态。
+`model_expectation` 用于评价模型是否正确预测动作效果；`task_assertion` 是主控定义的验收规则；`evidence` 是 provider 取得的材料；`assertion_result` 是 evaluator 的判断；`task_state` 是 reducer 产生的状态。
 
 字符识别样例中，剪贴板可以提供确定性文字 evidence，而 Qwen 的读取只作为诊断证据：
 
@@ -753,8 +934,8 @@ model_expectation
 | ActionIntent | 感知足够正确，但下一步决策错误、跳步或重复 | `qwen_planning` |
 | ActionProposal | 意图正确但坐标偏离目标 | `qwen_grounding` |
 | ActionProposal | 多动作、非法参数、截断或异常长输出 | `qwen_protocol` |
-| ActionAssessment | 应拒绝却允许，或错误拒绝 | `mcp_validation` |
-| ExecutionEffect | 实际注入动作与批准动作不一致 | `mcp_executor` |
+| PolicyDecision | 应拒绝却允许，或错误拒绝 | `mcp_validation` |
+| ExecutionReceipt | 实际注入动作与批准动作不一致 | `mcp_executor` |
 | EvidenceCollection | provider 采集失败、返回错误事实或错误接受过期证据 | `evidence_provider` |
 | AssertionEvaluation | evidence 正确，但断言被错误判为通过或失败 | `assertion_evaluator` |
 | TaskStateTransition | 断言结果正确，但任务状态发生非法转换 | `task_state_reducer` |
@@ -782,10 +963,10 @@ ActionIntent:
 ActionProposal:
   click(136,273)
 
-ActionAssessment:
-  坐标命中 BackgroundContainer，窗口级可执行
+PolicyDecision:
+  坐标命中 desktop role，窗口级可执行
 
-ExecutionEffect:
+ExecutionReceipt:
   无，主控未执行
 
 EvidenceCollection:
@@ -800,7 +981,7 @@ AssertionEvaluation:
 
 ### 12.2 Calculator 打开成 Music 样本
 
-该样本可确定：批准的点击动作由 MCP 按坐标准确执行，但结果窗口为 `deepin-music`，不满足 `deepin-calculator` 的 required postcondition。
+该样本可确定：批准的点击动作由 MCP 按坐标准确执行，但结果窗口为 `deepin-music`，不满足 `deepin-calculator` 的 task assertion。
 
 如果有独立 Dock 图标标注，可进一步区分是 `qwen_perception` 还是 `qwen_grounding`；没有该真值时，只能确认 Qwen 的动作提案未达到预期结果，不能臆测其内部感知原因。
 
@@ -837,7 +1018,7 @@ perception
 planning
 grounding
 protocol
-assessment
+guard-evaluation
 execution
 environment
 outcome
@@ -851,7 +1032,7 @@ policy
 
 ```text
 qwen
-mcp-assessment
+action-gate
 executor
 environment
 evidence-provider
@@ -898,8 +1079,9 @@ MODEL_EXPECTATION_MISMATCH
 #### MCP 与执行器
 
 ```text
-MCP_ASSESSMENT_FALSE_ALLOW
-MCP_ASSESSMENT_FALSE_REJECT
+POLICY_DECISION_FALSE_ALLOW
+POLICY_DECISION_FALSE_REJECT
+PROPOSAL_GUARD_EVALUATION_ERROR
 MCP_REPROJECTION_ERROR
 EXECUTOR_ACTION_MISMATCH
 EXECUTOR_ACTION_FAILED
@@ -909,6 +1091,13 @@ EXECUTOR_ACTION_FAILED
 
 ```text
 ENVIRONMENT_TARGET_CHANGED
+COORDINATE_SPACE_CHANGED
+TARGET_DISAPPEARED
+TARGET_IDENTITY_CHANGED
+TARGET_GEOMETRY_INVALIDATED
+TARGET_OCCLUDED
+HIT_TEST_CHANGED
+CURSOR_ORIGIN_CHANGED
 ENVIRONMENT_APPLICATION_NO_RESPONSE
 OUTCOME_POSTCONDITION_FAILED
 ```
@@ -1028,7 +1217,7 @@ ROOT_CAUSE_UNRESOLVED
   qwen/perception                  12.3%
   qwen/planning                     8.4%
   qwen/grounding                    4.7%
-  mcp-assessment                    0.6%
+  action-gate                       0.6%
   executor                          1.1%
   evidence-provider                0.2%
   assertion-evaluator              0.1%
@@ -1077,18 +1266,15 @@ ROOT_CAUSE_UNRESOLVED
 所有事件都追加到不可变、可审计的 Event Ledger：
 
 ```text
-frame captured
-model claim recorded
-proposal generated
-assessment passed
-proposal rejected
-execution requested
-execution succeeded / failed
-evidence collected
-assertion passed / failed / unknown / conflict
-task state transitioned
-attribution recorded
-session reset
+snapshot.created
+model_diagnostic.recorded
+proposal.created
+decision.created
+execution.completed
+evidence.collected
+assertion.evaluated
+task.transitioned
+attribution.recorded
 ```
 
 Ledger 是“系统运行中实际记录过什么”的权威历史，不表示其中每个 payload 都是界面真值。每个事件必须标记自己的认识论类型：
@@ -1097,9 +1283,9 @@ Ledger 是“系统运行中实际记录过什么”的权威历史，不表示�
 verified_fact       独立 evidence 支持并通过断言的事实
 model_claim         模型声称看到或认为的内容
 action_intent       模型希望达到的下一步效果
-action_proposal     模型提出的动作
-assessment_result   MCP 的确定性评估
-execution_effect    执行器实际注入的动作与副作用
+action_proposal     ProposalProvider 提出的动作
+policy_decision     Action Gate 的确定性裁决
+execution_receipt   执行器实际接受和注入的动作
 evidence            provider 采集的材料
 assertion_result    evaluator 对断言的评价
 state_transition    reducer 产生的任务状态变化
@@ -1114,19 +1300,30 @@ attribution         失败、拒绝、环境变化或证据不足的归因
   "task_id": "open-text-editor",
   "sequence": 108,
   "occurred_at": "2026-09-02T10:20:32Z",
-  "event_type": "assertion_result",
-  "epistemic_type": "verified_fact",
+  "event_type": "assertion.evaluated",
+  "epistemic_type": "assertion_result",
   "caused_by": ["event-106", "event-107"],
-  "frame_id": "frame-123",
-  "payload": {
-    "assertion_id": "editor-opened",
-    "status": "passed"
-  },
-  "artifact_refs": ["evidence-42"]
+  "snapshot_id": "snapshot-123",
+  "object_ref": "assertion-result-42",
+  "artifact_refs": ["evidence-42"],
+  "debug_ref": null
 }
 ```
 
-`sequence` 在单个 task 内单调递增；`caused_by` 记录因果输入，而不是只依赖相邻顺序猜测。已追加事件不原地修改，后续纠错通过新的 superseding event 表达。截图、原始模型输出和 provider 原始响应可以单独存储，但必须由 `artifact_refs` 可追溯。
+`sequence` 在单个 task 内单调递增；`caused_by` 记录因果输入，而不是只依赖相邻顺序猜测。Ledger 只保存核心对象和 artifact 的引用，不重复嵌入大对象。已追加事件不原地修改，后续纠错通过新的 superseding event 表达。
+
+AssertionResult 不能在产生时直接标为 `verified_fact`。只有 Task State Reducer 接受适用、有效且无冲突的 evidence 和 AssertionResult 后，才能追加独立事件：
+
+```json
+{
+  "event_type": "verified_fact.accepted",
+  "epistemic_type": "verified_fact",
+  "object_ref": "verified-fact-42",
+  "caused_by": ["evidence-42", "assertion-result-42"]
+}
+```
+
+必须保持 `EvidenceRecord ≠ AssertionResult ≠ VerifiedFact`；`failed`、`unknown` 或 `conflict` 的 AssertionResult 不能产生 verified fact。
 
 因此必须保持：
 
@@ -1139,7 +1336,7 @@ Context = 根据当前决策目的对 Ledger 的受控投影
 
 ### 13.3 Context Builder：Ledger 的策略化投影
 
-Qwen 每轮只能接收统一的 `ModelContext`，不能由调用方临时拼接原始 Tree、自由文本 history 或未标记的 `previous_feedback`：
+Qwen 每轮只能接收统一的 `ModelContext`，不能由调用方临时拼接合成器原始窗口树、自由文本 history 或未标记的 `previous_feedback`：
 
 ```json
 {
@@ -1158,19 +1355,18 @@ Qwen 每轮只能接收统一的 `ModelContext`，不能由调用方临时拼接
       {
         "path": "active_window.app_id",
         "value": "deepin-calculator",
-        "source": "treeland-tree",
+        "source": "compositor-window-tree",
         "evidence_ref": "evidence-window-52",
         "freshness": "current"
       }
     ]
   },
-  "recent_execution_effect": {
+  "recent_execution_receipt": {
     "executed_action": {
       "type": "click",
       "coordinate": [420, 610]
     },
-    "status": "executor-reported-success",
-    "delivery_status": "unknown",
+    "status": "delivered",
     "estimated_target_app": "deepin-calculator",
     "ledger_event_ref": "event-106"
   },
@@ -1194,13 +1390,13 @@ Qwen 每轮只能接收统一的 `ModelContext`，不能由调用方临时拼接
 ```text
 当前 screenshot
 + 与当前步骤有关的 verified facts
-+ 最近真实 ExecutionEffect
++ 最近真实 ExecutionReceipt
 + 独立 AssertionResult
 + 当前任务与策略约束
 → Qwen 下一动作
 ```
 
-其中 `estimated_target_app` 只表示 MCP 根据现有 Tree 几何和层级推导的顶层候选，不表示合成器已经证明输入实际交付给该应用。
+其中 `estimated_target_app` 只表示 MCP 根据现有窗口树几何和层级推导的顶层候选，不表示合成器已经证明输入实际交付给该应用。
 
 一个事实只有同时满足以下条件才能进入 `verified_state_projection`：
 
@@ -1212,7 +1408,7 @@ Qwen 每轮只能接收统一的 `ModelContext`，不能由调用方临时拼接
 
 以下内容不得进入 `verified_state_projection`：
 
-- 原始完整 Tree 或完整 Ledger；
+- 合成器原始完整窗口树或完整 Ledger；
 - 已过期或已被后续事件取代的事实；
 - Qwen 过去的 `model_claim`；
 - 未经证据支持的控件名称、按钮作用或业务结果；
@@ -1223,7 +1419,7 @@ Qwen 每轮只能接收统一的 `ModelContext`，不能由调用方临时拼接
 Context Builder 再根据任务阶段、失败状态、token 预算和视觉预算选择投影策略。至少支持：
 
 ```text
-compact               当前 frame、TaskContract、最近 effect 和未完成断言
+compact               当前 frame、TaskContract、最近 receipt 和未完成断言
 visual-heavy          更多近期截图和窗口变化，减少无关文本
 recovery              最近实际动作、失败断言、可靠 evidence 和恢复边界
 verification-focused  相关 evidence、冲突来源和待满足断言
@@ -1233,7 +1429,7 @@ planning-reset        保留任务事实与约束，丢弃可能造成路径依�
 典型 recovery context 只需要：
 
 - 最新有效截图及其 frame 身份；
-- 最近批准动作和实际 `ExecutionEffect`；
+- 最近批准动作和实际 `ExecutionReceipt`；
 - 未通过、未知或冲突的 assertion；
 - 最新且仍有效的高可信 evidence；
 - TaskContract、剩余预算和允许的恢复范围；
@@ -1312,19 +1508,19 @@ retry → reobserve → reset model history → ask controller
 | `authentication` | `deny` 或强确认 |
 | `unknown` | `confirm` |
 
-语义标签是集合而不是互斥枚举。多标签按 `deny > confirm > allow` 合并。Qwen `DONE` 不产生输入副作用，只触发 Evidence Collection 和后续断言评价。
+语义标签是集合而不是互斥枚举。PolicyProvider 只评价第 7.2 节 Semantic Resolution 输出的标签，不能直接把 Qwen 的 `semantic_intent` 当作已解析语义。每个标签必须保留 source、evidence reference 和 confidence；多标签按 `deny > confirm > allow` 合并。Qwen `DONE` 不产生输入副作用，只触发 Evidence Collection 和后续断言评价。
 
 最终执行资格为：
 
 ```text
 MCP capabilities
-∩ Task mechanical_permissions
-∩ Semantic policy decision
+∩ Task action permissions
+∩ PolicyDecision
 ∩ Deterministic window/coordinate validation
 = execution eligibility
 ```
 
-Tree 容器类型本身不是风险等级，同一种 `click(x,y)` 可以是低风险导航，也可以触发删除、支付或外部发送。
+合成器窗口 role 本身不是风险等级，同一种 `click(x,y)` 可以是低风险导航，也可以触发删除、支付或外部发送。
 
 ## 16. 对外接口
 
@@ -1340,9 +1536,9 @@ gui_run(operation, ...)
 describe
 observe
 propose
-assess
+decide
 execute
-verify
+evaluate
 status
 reset
 trace
@@ -1354,11 +1550,11 @@ trace
 propose → execute → verify
 ```
 
-这里的 `verify` 只是迁移期 facade 名称，内部必须展开为 `collect_evidence → evaluate_assertions → reduce_task_state`，不能重新实现成一个拥有所有真值的单体 Verifier。`propose` 内部必须先构造统一 `ModelContext`，不能把调用方的自由文本反馈直接拼接进 Qwen history。
+迁移期可保留 `assess` 和 `verify` 别名；`verify` 内部必须展开为 `collect_evidence → evaluate_assertions → reduce_task_state`，不能重新实现成一个拥有所有真值的单体 Verifier。`propose` 调用模型前必须先构造统一 ModelContext，不能把调用方的自由文本反馈直接拼接进 Qwen history。
 
-只有诊断时才展开截图、模型 raw output、完整 Tree 和事件 trace。
+只有诊断时才展开截图、模型 raw output、合成器原始窗口树和事件 trace。
 
-`describe` 返回操作 schema、风险要求、可能的 effects、Evidence Provider 能力、Assertion Evaluator 能力和 Tree capability，避免主控依赖隐含约定。
+`describe` 返回核心 schema 版本、已注册 Adapter/Provider、标准 fact path、风险 profile 和可用动作，避免主控依赖隐含约定。
 
 其中 capabilities 与任务授权分开返回：
 
@@ -1378,93 +1574,81 @@ propose → execute → verify
 | 已发现问题 | v2 处理方式 |
 | --- | --- |
 | `Qwen` 读成 `Owen` | 保存 `model_claim`，与独立文本真值比较，归因 `qwen_perception` |
-| Calculator 打开成 Music | 对比 ModelExpectation、实际 `appId` 和 required postcondition；有图标真值后再细分 perception/grounding |
+| Calculator 打开成 Music | 对比 ModelExpectation、实际 `appId` 和 task assertion；有图标真值后再细分 perception/grounding |
 | 清空后跳过步骤 | System Task State 不推进，Qwen 不能绕过未通过 assertion |
 | `Ctrl+Z` 只删一个字符却 `DONE` | `DONE` 触发文本 evidence 采集；非空断言失败，Task State 不得完成 |
 | 多动作或超长输出 | Proposal schema 只允许单动作，并在解析前限制长度 |
 | 错误快捷键 | 平台白名单和 TaskContract 双重限制 |
-| Background 图标 | Tree 仅记录背景容器；低风险点击后用实际窗口结果验证 |
+| 桌面图标 | 窗口树仅记录桌面 role；低风险点击后用实际窗口结果验证 |
 | 窗口被遮挡 | 执行前重新融合并拒绝，保留现有机制 |
 
 ## 18. 实施顺序
 
-### Phase 1：协议与命名，不改变执行行为
+### Phase 1：建立 Canonical Model，不改变执行行为
 
-- 增加统一 envelope；
-- 将 `observation` 重命名或兼容映射为 `perception_claim.observation_text`；
-- 明确 `ActionIntent`、`ActionProposal` 和 `ModelExpectation`；
-- 分离 `execution_eligibility` 与 `proposal_correctness`；
-- 返回 Tree capability 声明；
-- 保留旧字段兼容。
+- 定义 `AdapterDescriptor`、`CanonicalSnapshot` 和 `CanonicalWindowFact`；
+- 实现 `CompositorAdapter` port；
+- 用 `TreelandAdapter` 包装现有 `treeland-debug --tree`；
+- 将现有空间融合改为只读取 CanonicalSnapshot；
+- 将 `z_index` 降为可选 best-effort，并声明 stacking model 与 hit-test/occlusion 能力；
+- 保存原始 Tree 为 `raw_artifact_ref`，停止向核心传播 Treeland 专有字段；
+- 建立跨合成器 fixture 契约测试。
 
-### Phase 2：TaskContract、Evidence 与 Assertion
+### Phase 2：建立单动作事务内核
 
-- 增加 mechanical permissions、semantic policy、runtime limits 和 required postconditions；
-- 实现多语义标签与 `deny > confirm > allow` 决策；
-- 定义统一 Evidence schema、provider registry、时效和冲突规则；
-- 实现窗口 `appId/title`、光标、截图变化等基础 Evidence Provider；
+- 定义 `ActionProposal`、`PolicyDecision` 和 `ExecutionReceipt`；
+- 所有 Proposal 用 `based_on_snapshot` 记录来源并声明显式坐标空间；
+- 实现控制层 ProposalGuard，并按动作依赖条件检查有效性；
+- 实现 Semantic Resolution，区分模型 claim 与独立 semantic evidence；
+- 统一桌面边界、窗口目标、遮挡、语义和权限检查；
+- 将详细 Assessment 移到 `debug_ref`；
+- Qwen 每轮只产生一个 ActionProposal；
+- 保留旧 `qwen_cua_predict/execute` facade 作为兼容层。
+
+### Phase 3：拆出可替换组件
+
+- Qwen-CUA 实现 `ProposalProvider`；
+- PyAutoGUI 实现 `InputExecutor`；
+- `dde-am` 实现 `ApplicationLauncher`；
+- Deepin 快捷键目录实现 `PlatformCapabilityProvider`；
+- 平台快捷键和应用启动也生成 Proposal，不得旁路事务；
+- 核心代码不得 import 具体 adapter。
+
+### Phase 4：收紧 Evidence、Ledger 和上下文通信
+
+- Evidence Provider 只声明和返回注册表中的标准 fact path；
 - 实现 Assertion Evaluator 和确定性的 Task State Reducer；
-- Qwen `DONE` 必须经过 Evidence Collection、Assertion Evaluation 和 Task State Transition。
+- Ledger 只追加核心对象引用和 artifact 引用；
+- 固定 compact/recovery ModelContext 投影；
+- 正常响应只返回最小对象或引用，合成器原始窗口树、截图、模型输出和 trace 仅通过诊断接口读取；
+- 接入 AT-SPI、OCR、DOM、应用 API 等独立 provider 时不得扩大合成器窗口事实。
 
-### Phase 3：事件账本与上下文构造
-
-- 保存 proposal、assessment、effect、evidence、assertion result 和 state transition；
-- 固定统一 `ModelContext` schema，并让 `propose` 只通过 Context Builder 调用 Qwen；
-- 为每个失败、拒绝、环境变化和证据不足事件写入稳定 attribution；
-- 支持 primary cause 与 contributing factors；
-- 区分 verified facts、model claims 和其他事件类型；
-- 实现 compact、visual-heavy、recovery 等 Context Builder 策略；
-- 分别限制截图、文本 token 和事件数量；
-- 先评测 Context 投影策略，再将不同视觉历史长度作为兼容性基线。
-
-### Phase 4：自动闭环
-
-- 实现 `gui_run`；
-- 支持预定义状态机验收；
-- 加入无进展、重复动作、错误恢复和最大步骤保护。
-
-### Phase 5：增强控件真值
-
-按需接入独立 evidence provider：
-
-- AT-SPI；
-- OCR；
-- DOM；
-- 应用 API；
-- OmniParser 对照。
-
-这些 provider 独立于 Treeland Tree，不能将控件语义混入窗口树事实。
+自动闭环 `gui_run` 应在四个阶段完成并通过契约测试后实现，不得先于小核心稳定。
 
 ## 19. 验收条件
 
 v2 至少满足：
 
-1. 主控不会因为 `BackgroundContainer` 自动拒绝桌面图标点击。
-2. 所有模型自然语言观察明确标记为 `model_claim`。
-3. Qwen `DONE` 无法直接产生任务成功。
-4. Tree 只参与窗口级确定性校验。
-5. 每次真实副作用都记录在 `effects`。
-6. 每个失败都有责任层、稳定错误码和可执行重试建议。
-7. pending、遮挡、窗口移动和执行失败都有契约测试。
-8. 预定义 GUI 验收完全依赖独立断言决定通过与否。
-9. 未执行且没有独立真值的模型提案不计成功或失败。
-10. 现有接口在迁移期保持兼容，能够按阶段回退。
-11. 能分别归因 perception、planning、grounding、protocol、assessment、execution、environment、outcome、evidence-collection、assertion-evaluation、state-transition 和 policy 事件。
-12. `model_expectation` 与 TaskContract 的 `required_postcondition` 不得互相替代。
-13. MCP capabilities 与 Task mechanical permissions 明确分离。
-14. 动作机械类型不直接决定风险；风险由 semantic policy 解析。
-15. 多语义标签使用稳定的 `deny > confirm > allow` 优先级，`unknown` 不得静默自动执行。
-16. Attribution 的 `stage`、`owner`、`code`、`event_kind` 和 `evidence_status` 使用稳定枚举。
-17. 安全拒绝、环境变化和正常策略拒绝不得计入组件错误率。
-18. 每个失败任务最多有一个 primary attribution，并可保留多个 contributing factors。
-19. Benchmark 按维度使用匹配的有效分母，同时报告未归因与证据不足样本。
-20. Evidence Provider 只产生带来源、作用域、时效和质量信息的 evidence，不直接决定任务成功。
-21. Assertion Evaluator 只使用 TaskContract 断言和引用的 evidence，`unknown` 或 `conflict` 不得视为通过。
-22. 只有 Task State Reducer 可以产生 `completed`，且所有必要断言必须通过。
-23. Event Ledger 保存完整审计历史，并明确区分 `verified_fact`、`model_claim`、`execution_effect`、`evidence` 等事件类型。
-24. Qwen Context 必须是 Ledger 的可追溯投影；每个上下文项可定位到原始 event id。
-25. Context Builder 分别管理视觉、文本和事件预算，支持至少 compact 与 recovery 两种策略。
-26. Qwen 每轮直接输入必须是统一 `ModelContext`，至少包含当前 screenshot、TaskContract 投影、VerifiedStateProjection、最近 ExecutionEffect、Assertion feedback 和当前约束。
-27. 原始完整 Tree、完整 Ledger、自由文本 history 和未标记 `previous_feedback` 不得直接进入 Qwen 上下文。
-28. `ActionIntent`、`ExecutionEffect` 和 `AssertionResult` 不得互相替代；`previous_action: clear` 之类混合语义字段不得出现在新协议。
-29. 只有独立 evidence 支持时，`display_not_empty` 等内容断言才能作为正式 assertion feedback；仅有 Qwen 自述时只在 Ledger 保留 `model_claim`，对应断言保持 `unknown`。
+1. Core 中不出现 `treeland-debug`、`dde-am`、Deepin、Qwen 或 PyAutoGUI 专有逻辑。
+2. 合成器原始字段不能直接进入 TaskContract、ActionProposal、PolicyDecision 或 Assertion。
+3. 不同合成器 fixture 可以归一化成语义一致的 CanonicalSnapshot。
+4. 合成器多余字段不会进入 Canonical Model；完整原始数据只能由 `raw_artifact_ref` 读取。
+5. Adapter 不支持或本轮未取得的事实返回 `unknown`，不能当作 `false`、失败或通过。
+6. CompositorAdapter 只提供窗口、光标、桌面几何和坐标空间事实，不提供控件或业务语义。
+7. 主控不会因为桌面 role 或合成器特有容器名自动拒绝桌面图标点击。
+8. 每个 ActionProposal 只包含一个动作，并用 `based_on_snapshot` 记录 provenance，同时声明坐标空间。
+9. 新 Snapshot 出现后必须重检 ProposalGuard；只有动作依赖条件失效才拒绝，不能因 Snapshot 整体不同自动 stale。
+10. Qwen 点击、键盘操作、平台快捷键和应用启动都经过同一 PolicyDecision、ExecutionReceipt 和 AssertionResult 流程。
+11. ExecutionReceipt 的 `delivered` 与任务成功严格分离。
+12. Qwen `DONE`、模型预期和模型自述无法直接产生 `completed` 或 verified fact。
+13. Evidence Provider 只产生注册表中的标准事实，不直接决定任务状态；Semantic Resolution 必须区分独立 semantic evidence 与模型 claim。
+14. Assertion Evaluator 对 `unknown` 或 `conflict` 不得判定通过；只有 Task State Reducer 可以产生 `completed`。
+15. 正常组件通信不传合成器原始完整窗口树、完整 Ledger、完整模型输出或大而空的统一 envelope。
+16. Ledger 只保存不可变事件、核心对象引用和 artifact 引用；`assertion.evaluated` 使用 `assertion_result` 类型，只有 Reducer 接受后才能产生独立 `verified_fact` 事件。
+17. 新增合成器只增加 Adapter，新增验证来源只增加 Evidence Provider，新增启动方式只增加 ApplicationLauncher。
+18. 所有跨组件核心对象带 `schema_version`、稳定 ID、来源和必要引用。
+19. 每个失败都有稳定错误码、责任组件和可执行恢复建议；安全拒绝与环境变化不计入组件错误率。
+20. 现有接口在迁移期保持兼容，并可按阶段回退。
+21. `z_index` 是可选、当前 Snapshot 内 best-effort 字段；Core 的点击安全不能要求所有 Adapter 提供全局完美全序。
+22. Adapter 提供 `hit-test`、`partial-order`、`total-order`、`topmost-only` 或 `unavailable` 中明确的 stacking capability，能力不足时返回 `unknown`。
+23. `ExecutionReceipt.delivered` 始终只表示执行后端接受并注入动作，不能被输入回执或后续 evidence 扩大为应用处理或业务成功。
