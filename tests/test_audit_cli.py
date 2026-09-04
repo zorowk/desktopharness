@@ -5,7 +5,7 @@ import unittest
 from unittest.mock import patch
 from pathlib import Path
 
-from mcp_autogui.audit_cli import _load_object, _print_json, extract, main, summary, timeline
+from mcp_autogui.audit_cli import _load_object, _open_archive, _print_json, create_archive, extract, main, summary, timeline
 from mcp_autogui.core.ledger import CsvAuditEventLedger
 from mcp_autogui.core.store import JsonAuditObjectStore
 
@@ -38,3 +38,17 @@ class AuditCliTests(unittest.TestCase):
             extract(Path(directory), "image-1", image)
             with open(image, "rb") as handle:
                 self.assertEqual(handle.read(), b"png-data")
+
+    def test_portable_compressed_archive_can_be_opened_without_manual_extraction(self):
+        with tempfile.TemporaryDirectory() as directory, tempfile.TemporaryDirectory() as destination:
+            store = JsonAuditObjectStore(directory)
+            store.put({"event": "preserved"}, object_ref="object-1")
+            store.put(b"raw-artifact", object_ref="artifact-1")
+            CsvAuditEventLedger(directory).append("task-1", "event", "evidence", "object-1")
+            archive = create_archive(Path(directory), f"{destination}/audit-copy")
+
+            self.assertTrue(archive.name.endswith(".tar.gz"))
+            with _open_archive(archive) as extracted:
+                self.assertEqual(_load_object(extracted, "object-1"), {"event": "preserved"})
+                extract(extracted, "artifact-1", f"{destination}/restored.bin")
+                self.assertEqual(Path(f"{destination}/restored.bin").read_bytes(), b"raw-artifact")
