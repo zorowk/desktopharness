@@ -390,6 +390,11 @@ def _env_enabled(name, default=False):
 
 
 def register_omniparser_tools(mcp):
+    raise RuntimeError(
+        "legacy OmniParser direct execution tools are removed; "
+        "use OmniParserEvidenceProvider through gui_run evaluation instead"
+    )
+
     omniparser_thread = None
     result_image = None
     detail = None
