@@ -33,6 +33,7 @@ class AuditCliTests(unittest.TestCase):
             self.assertIn("tasks: 1", rendered)
             self.assertIn("task.created", rendered)
             self.assertIn('"goal": "open editor"', rendered)
+            self.assertIn("archive_bytes:", rendered)
 
             image = f"{directory}/extracted.png"
             extract(Path(directory), "image-1", image)

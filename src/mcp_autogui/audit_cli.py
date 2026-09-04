@@ -87,6 +87,14 @@ def _events(root: Path) -> list[dict[str, str]]:
         return list(csv.DictReader(handle))
 
 
+def _archive_bytes(root: Path) -> int:
+    files = [root / "ledger.csv"]
+    for directory, pattern in ((root / "objects", "*.json"), (root / "artifacts", "*.bin")):
+        if directory.is_dir():
+            files.extend(directory.glob(pattern))
+    return sum(path.stat().st_size for path in files if path.is_file())
+
+
 def _object_path(root: Path, reference: str) -> Path:
     if not reference or "/" in reference or "\\" in reference or reference.startswith("."):
         raise ValueError("invalid object reference")
@@ -116,7 +124,7 @@ def summary(root: Path) -> None:
     print(f"tasks: {len(task_ids)}")
     print(f"events: {len(events)}")
     print(f"objects: {len(objects)}")
-    print(f"object_bytes: {sum(path.stat().st_size for path in objects)}")
+    print(f"archive_bytes: {_archive_bytes(root)}")
     for event_type, count in Counter(event["event_type"] for event in events).most_common():
         print(f"{event_type}: {count}")
 
@@ -195,12 +203,11 @@ def _run_tui(screen, root: Path) -> None:
         if state == "tasks":
             entries = sorted(grouped)
             event_count = sum(len(events) for events in grouped.values())
-            object_dir = root / "objects"
-            object_bytes = sum(path.stat().st_size for path in object_dir.glob("*.json")) if object_dir.is_dir() else 0
+            archive_bytes = _archive_bytes(root)
             _title(
                 screen,
                 width,
-                f"[ AUTOUI // AUDIT ]  {len(entries)} TASKS :: {event_count} EVENTS :: {object_bytes} BYTES",
+                f"[ AUTOUI // AUDIT ]  {len(entries)} TASKS :: {event_count} EVENTS :: {archive_bytes} BYTES",
                 "↑↓ select  Enter timeline  z compress  q quit",
             )
             if not entries:
