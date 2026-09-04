@@ -4,7 +4,7 @@
 
 ## 已实现边界
 
-- `core/` 包含 canonical 协议对象、Action Gate、ProposalGuard、语义策略、Assertion Evaluator、确定性 Task State Reducer、append-only Ledger、Context Builder 和薄 Orchestrator。
+- `core/` 包含 canonical 协议对象、Action Gate、ProposalGuard、语义策略、Assertion Evaluator、确定性 Task State Reducer、append-only Ledger、Context Builder 和薄 Orchestrator；可选审计模式使用私有 JSON 对象目录和 `ledger.csv` 持久化小型协议对象与事件。
 - `ports/` 定义 compositor、frame、proposal、policy、executor、application launcher、platform capability 和 evidence 契约。
 - `adapters/` 包含 Treeland 与严格 canonical-JSON compositor adapter、Qwen-CUA proposal adapter、PyAutoGUI frame/input adapter、Deepin capability adapter、`dde-am` launcher 和 compositor-window evidence provider。
 - `facade.py` 实现紧凑的 `gui_run` 操作和诊断对象查询。
@@ -28,8 +28,22 @@ v2 事务内核和默认 Qwen + Treeland 路径已经实现；以下事项不应
    业务结果。
 2. **跨合成器实证**：CanonicalJsonAdapter 已覆盖协议夹具；仍需至少一个非 Treeland
    合成器的真实 adapter 与同等契约/桌面测试，才能证明通用性。
-3. **持久审计（按部署需要）**：当前 ObjectStore 是进程内存储。若任务轨迹需要跨进程
-   重启保存、复核或统计，应替换为具有访问控制和保留策略的持久 artifact/object store。
+3. **持久审计的真实环境验收**：设置 `GUI_AUDIT_DIR` 后，运行时将小型、结构化协议对象
+   以及截图、原始树和模型输出等 artifact 写入私有 JSON 文件，并把 Ledger 追加到
+   `ledger.csv`；二进制以 Base64 JSON 封装。目录拒绝 group/other 可访问权限，默认保留
+   7 天、总计 16 GiB（以 `GUI_AUDIT_MAX_GIB` 调整），超出总容量时从最旧对象开始清理。仍需按部署路径验证权限、容量和
+   保留策略；该审计副本用于重启后
+   复核，不能恢复执行中的任务。
+
+启用审计后，可用与合成器无关的 `autoui-audit` 浏览存档。直接传目录会进入终端 TUI：
+
+```text
+autoui-audit /private/path/audit
+```
+
+TUI 支持任务列表 → 事件时间线 → 对象详情的逐层浏览；`↑↓` 选择、`Enter` 进入、`b`
+返回、`q` 退出。顶栏显示任务、事件和归档容量；对象详情页可展开 JSON，二进制 artifact
+可按 `e` 后输入的路径导出，并拒绝覆盖已有文件。
 4. **集中真实 Treeland 回归验收**：在上述实现完成后，按
    `manual-test-guide.md` 的基础事务、桌面适配器与 5×10 重复矩阵执行，产出可复核的
    成功率、拒绝率、延迟和 attribution 报告。当前单元测试不能替代此项。
