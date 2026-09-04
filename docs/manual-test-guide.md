@@ -35,6 +35,9 @@ actions 与 `run` 操作。若 capability 或 provider 缺失，记录为环境�
 ExecutionReceipt、Evidence、AssertionResult、TaskState、attribution 与恢复建议。
 `delivered` 仅说明输入已注入；只有 `completed` 才代表所有必要断言通过。
 
+启用 `GUI_AUDIT_DIR` 时，还须保存 `ledger.csv`、JSON 对象与 `artifacts/`；审计副本用于
+事后复核，不能恢复一个正在执行的任务。`reset` 必须追加审计事件而非删除历史。
+
 ## 3. 基础事务用例
 
 | ID | 场景 | 操作 | 通过标准 |
@@ -49,6 +52,10 @@ ExecutionReceipt、Evidence、AssertionResult、TaskState、attribution 与恢�
 | V2-08 | 任务完成 | 使用 `active_window.app_id` 等可独立验证的 assertion | 所有 required assertions 通过后，且仅由 Reducer 给出 `completed`。 |
 | V2-09 | 有界自动循环 | `gui_run(operation="run", max_iterations=...)` | 每轮遵循单动作事务；确认、拒绝、无进展、预算耗尽或终态时停止并返回原因。 |
 | V2-10 | 诊断与重置 | `status`、`trace`、`reset` | trace 可追溯对象/因果关系；reset 后同一 task 可重新开始。 |
+| V2-11 | 持久审计重启复核 | 结束一次事务后重启服务并打开同一 `GUI_AUDIT_DIR` | CSV 事件、对象和 artifact 仍可按引用读取；不要求恢复运行态。 |
+| V2-12 | Reset 审计保留 | 对已有事件的 task 调用 `reset` | 既有事件保留，末尾追加 `task.reset`，不重写删除历史。 |
+| V2-13 | 审计保留清理 | 构造含多个 artifact 的过期对象或超容量归档 | 被清理对象及其全部 artifact 同时移除；不留下断链或孤儿。 |
+| V2-14 | 便携归档 | 在 TUI 中导出 `.tar.gz`，复制到另一台机器后打开 | `manifest.json` 校验所有成员；完整归档可浏览和导出 artifact；校验失败必须拒绝打开。 |
 
 ## 4. 桌面适配器用例
 
