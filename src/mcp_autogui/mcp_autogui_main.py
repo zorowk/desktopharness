@@ -37,7 +37,7 @@ from .core.models import (
     new_id,
 )
 from .core.orchestrator import CoreOrchestrator
-from .core.store import ObjectStore
+from .core.audit import audit_components_from_environment
 from .facade import GuiRunFacade
 from .desktop_capabilities import (
     find_capability,
@@ -718,7 +718,7 @@ def mcp_autogui_main(mcp):
     backend_close = getattr(qwen_backend, "close", None)
     if callable(backend_close):
         atexit.register(backend_close)
-    store = ObjectStore()
+    store, ledger = audit_components_from_environment()
     compositor = TreelandAdapter(
         tree_reader=lambda: get_treeland_layout_tree(),
         cursor_reader=pyautogui.position,
@@ -793,6 +793,7 @@ def mcp_autogui_main(mcp):
         evidence_providers=tuple(evidence_providers),
         policy_providers=(platform_policy,),
         store=store,
+        ledger=ledger,
     )
     facade = GuiRunFacade(runtime)
     def capture_frame():

@@ -272,6 +272,10 @@ export CUA_MODEL_BASE_URL="${CUA_MODEL_BASE_URL:-http://127.0.0.1:8000/v1}"
 export CUA_MODEL="${CUA_MODEL:-qwen3_rl}"
 export CUA_MODEL_TLS_VERIFY="${CUA_MODEL_TLS_VERIFY:-1}"
 export GUI_OMNIPARSER_ENABLED="${GUI_OMNIPARSER_ENABLED:-0}"
+# Optional audit: private JSON objects/artifacts plus ledger.csv.
+export GUI_AUDIT_DIR="${GUI_AUDIT_DIR:-}"
+export GUI_AUDIT_RETENTION_DAYS="${GUI_AUDIT_RETENTION_DAYS:-7}"
+export GUI_AUDIT_MAX_GIB="${GUI_AUDIT_MAX_GIB:-16}"
 uv run treeland-autogui-mcp || exit $?
 
 cat <<EOF
