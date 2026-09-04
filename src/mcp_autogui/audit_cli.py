@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
+import io
 import json
 import os
 import sys
@@ -37,7 +39,21 @@ def _open_archive(path: Path):
     with tempfile.TemporaryDirectory(prefix="autoui-audit-") as temporary:
         root = Path(temporary)
         with tarfile.open(path, "r:gz") as archive:
+            try:
+                manifest_member = archive.getmember("manifest.json")
+                manifest_source = archive.extractfile(manifest_member)
+                if manifest_source is None:
+                    raise ValueError("audit archive manifest is unreadable")
+                manifest = json.load(manifest_source)
+                expected_files = manifest["files"]
+            except (KeyError, json.JSONDecodeError, tarfile.TarError) as exc:
+                raise ValueError("audit archive lacks a valid manifest.json") from exc
+            members = [member for member in archive.getmembers() if member.name != "manifest.json"]
+            if set(expected_files) != {member.name for member in members}:
+                raise ValueError("audit archive manifest does not match its members")
             for member in archive.getmembers():
+                if member.name == "manifest.json":
+                    continue
                 member_path = Path(member.name)
                 allowed = member.name == "ledger.csv" or (
                     len(member_path.parts) == 2
@@ -53,7 +69,16 @@ def _open_archive(path: Path):
                 source = archive.extractfile(member)
                 if source is None:
                     raise ValueError(f"cannot read audit archive member: {member.name}")
-                destination.write_bytes(source.read())
+                digest = hashlib.sha256()
+                size = 0
+                with destination.open("wb") as handle:
+                    while chunk := source.read(1024 * 1024):
+                        handle.write(chunk)
+                        digest.update(chunk)
+                        size += len(chunk)
+                expected = expected_files[member.name]
+                if expected != {"bytes": size, "sha256": digest.hexdigest()}:
+                    raise ValueError(f"audit archive integrity check failed: {member.name}")
         yield root
 
 
@@ -64,19 +89,39 @@ def create_archive(root: Path, output: str) -> Path:
     if target.exists():
         raise ValueError(f"refusing to overwrite existing output: {target}")
     target.parent.mkdir(parents=True, exist_ok=True)
+    files = []
+    ledger = root / "ledger.csv"
+    if ledger.is_file():
+        files.append((ledger, "ledger.csv"))
+    for directory, pattern, name in (
+        (root / "objects", "*.json", "objects"),
+        (root / "artifacts", "*.bin", "artifacts"),
+    ):
+        if directory.is_dir():
+            files.extend((path, f"{name}/{path.name}") for path in sorted(directory.glob(pattern)))
+    manifest = {
+        "schema_version": 1,
+        "files": {
+            arcname: {"bytes": path.stat().st_size, "sha256": _sha256_file(path)}
+            for path, arcname in files
+        },
+    }
     with tarfile.open(target, "w:gz") as archive:
-        ledger = root / "ledger.csv"
-        if ledger.is_file():
-            archive.add(ledger, arcname="ledger.csv", recursive=False)
-        objects = root / "objects"
-        if objects.is_dir():
-            for object_file in sorted(objects.glob("*.json")):
-                archive.add(object_file, arcname=f"objects/{object_file.name}", recursive=False)
-        artifacts = root / "artifacts"
-        if artifacts.is_dir():
-            for artifact_file in sorted(artifacts.glob("*.bin")):
-                archive.add(artifact_file, arcname=f"artifacts/{artifact_file.name}", recursive=False)
+        for source, arcname in files:
+            archive.add(source, arcname=arcname, recursive=False)
+        manifest_bytes = json.dumps(manifest, separators=(",", ":")).encode("utf-8")
+        info = tarfile.TarInfo("manifest.json")
+        info.size = len(manifest_bytes)
+        archive.addfile(info, io.BytesIO(manifest_bytes))
     return target
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _events(root: Path) -> list[dict[str, str]]:
@@ -164,7 +209,7 @@ def extract(root: Path, reference: str, output: str) -> None:
     if artifact.parent != root / "artifacts" or not artifact.is_file():
         raise ValueError("archived artifact file is missing")
     payload = artifact.read_bytes()
-    if __import__("hashlib").sha256(payload).hexdigest() != metadata.get("sha256"):
+    if hashlib.sha256(payload).hexdigest() != metadata.get("sha256"):
         raise ValueError("archived artifact checksum mismatch")
     target.write_bytes(payload)
     print(target)

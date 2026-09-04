@@ -1,5 +1,7 @@
 import contextlib
 import io
+import json
+import tarfile
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -53,3 +55,20 @@ class AuditCliTests(unittest.TestCase):
                 self.assertEqual(_load_object(extracted, "object-1"), {"event": "preserved"})
                 extract(extracted, "artifact-1", f"{destination}/restored.bin")
                 self.assertEqual(Path(f"{destination}/restored.bin").read_bytes(), b"raw-artifact")
+
+    def test_portable_archive_rejects_a_manifest_with_missing_members(self):
+        with tempfile.TemporaryDirectory() as directory:
+            archive_path = Path(directory) / "invalid.tar.gz"
+            payload = b"task_id,sequence\n"
+            with tarfile.open(archive_path, "w:gz") as archive:
+                ledger = tarfile.TarInfo("ledger.csv")
+                ledger.size = len(payload)
+                archive.addfile(ledger, io.BytesIO(payload))
+                manifest = json.dumps({"schema_version": 1, "files": {}}).encode()
+                manifest_info = tarfile.TarInfo("manifest.json")
+                manifest_info.size = len(manifest)
+                archive.addfile(manifest_info, io.BytesIO(manifest))
+
+            with self.assertRaisesRegex(ValueError, "manifest does not match"):
+                with _open_archive(archive_path):
+                    pass
