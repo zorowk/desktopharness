@@ -180,34 +180,56 @@ class JsonAuditObjectStore(ObjectStore):
                 os.unlink(temporary)
 
     def _prune(self) -> None:
-        files = self._audit_files()
         cutoff = time.time() - self.retention_days * 86400
-        for path in files:
-            if path.stat().st_mtime < cutoff:
-                self._remove_audit_file(path)
-        files = self._audit_files()
-        total = sum(path.stat().st_size for path in files)
-        for path in files:
+        for created_at, paths in self._audit_bundles():
+            if created_at < cutoff:
+                self._remove_bundle(paths)
+        bundles = self._audit_bundles()
+        total = sum(path.stat().st_size for _, paths in bundles for path in paths)
+        for _, paths in bundles:
             if total <= self.max_total_bytes:
                 break
-            total -= path.stat().st_size
-            self._remove_audit_file(path)
+            total -= sum(path.stat().st_size for path in paths)
+            self._remove_bundle(paths)
 
-    def _audit_files(self) -> list[Path]:
-        return sorted(
-            [*self.directory.glob("*.json"), *self.artifact_directory.glob("*.bin")],
-            key=lambda item: item.stat().st_mtime,
-        )
+    def _audit_bundles(self) -> list[tuple[float, tuple[Path, ...]]]:
+        bundles: list[tuple[float, tuple[Path, ...]]] = []
+        referenced_artifacts: set[Path] = set()
+        for object_path in self.directory.glob("*.json"):
+            artifacts: list[Path] = []
+            try:
+                with object_path.open("r", encoding="utf-8") as handle:
+                    envelope = json.load(handle)
+                artifacts = self._artifact_paths(envelope.get("value"))
+            except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                # A malformed object is retained/pruned as one independent
+                # unit so cleanup never deletes unrelated evidence.
+                artifacts = []
+            referenced_artifacts.update(artifacts)
+            bundles.append((object_path.stat().st_mtime, tuple([object_path, *artifacts])))
+        for artifact_path in self.artifact_directory.glob("*.bin"):
+            if artifact_path not in referenced_artifacts:
+                bundles.append((artifact_path.stat().st_mtime, (artifact_path,)))
+        return sorted(bundles, key=lambda item: item[0])
 
-    def _remove_audit_file(self, path: Path) -> None:
-        sibling = (
-            self.artifact_directory / f"{path.stem}.bin"
-            if path.parent == self.directory
-            else self.directory / f"{path.stem}.json"
-        )
-        path.unlink()
-        if sibling.exists():
-            sibling.unlink()
+    def _artifact_paths(self, value: Any) -> list[Path]:
+        if isinstance(value, dict):
+            if set(value) == {"__audit_artifact__"}:
+                metadata = value["__audit_artifact__"]
+                path = metadata.get("path") if isinstance(metadata, dict) else None
+                name = Path(path).name if isinstance(path, str) else ""
+                candidate = self.artifact_directory / name
+                return [candidate] if name and candidate.is_file() else []
+            return [path for item in value.values() for path in self._artifact_paths(item)]
+        if isinstance(value, list):
+            return [path for item in value for path in self._artifact_paths(item)]
+        return []
+
+    @staticmethod
+    def _remove_bundle(paths: tuple[Path, ...]) -> None:
+        for path in paths:
+            if path.exists():
+                path.unlink()
 
 
 def _private_directory(directory: str | Path) -> Path:

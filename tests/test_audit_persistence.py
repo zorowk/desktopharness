@@ -1,5 +1,6 @@
 import os
 import tempfile
+import time
 import unittest
 
 from mcp_autogui.core.audit import audit_components_from_environment
@@ -41,3 +42,17 @@ class AuditPersistenceTests(unittest.TestCase):
         finally:
             if original is not None:
                 os.environ["GUI_AUDIT_DIR"] = original
+
+    def test_retention_prunes_an_object_and_all_of_its_artifacts_together(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = JsonAuditObjectStore(directory, retention_days=7)
+            store.put({"one": b"first", "two": b"second"}, object_ref="object-1")
+            paths = [store.directory / "object-1.json", *store.artifact_directory.glob("object-1*.bin")]
+            expired = time.time() - 2 * 86400
+            for path in paths:
+                os.utime(path, (expired, expired))
+
+            JsonAuditObjectStore(directory, retention_days=1)
+
+            self.assertFalse((store.directory / "object-1.json").exists())
+            self.assertEqual(list(store.artifact_directory.glob("object-1*.bin")), [])
