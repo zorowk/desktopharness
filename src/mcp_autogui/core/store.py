@@ -113,8 +113,21 @@ class JsonAuditObjectStore(ObjectStore):
                 ensure_ascii=False,
                 separators=(",", ":"),
             ).encode("utf-8")
-        except (TypeError, ValueError):
-            return None
+        except (TypeError, ValueError, RecursionError) as exc:
+            self._remove_artifacts_for_reference(reference)
+            encoded = json.dumps(
+                {
+                    "schema_version": 1,
+                    "stored_at": utc_now(),
+                    "value": {
+                        "__audit_unavailable__": {
+                            "value_type": f"{type(value).__module__}.{type(value).__qualname__}",
+                            "reason": f"{type(exc).__name__}: value is not JSON serializable",
+                        }
+                    },
+                },
+                separators=(",", ":"),
+            ).encode("utf-8")
         return encoded
 
     def _to_audit_primitive(self, reference: str, value: Any, artifact_index: list[int]) -> Any:
@@ -178,6 +191,15 @@ class JsonAuditObjectStore(ObjectStore):
         finally:
             if os.path.exists(temporary):
                 os.unlink(temporary)
+
+    def _remove_artifacts_for_reference(self, reference: str) -> None:
+        artifacts = [
+            self.artifact_directory / f"{reference}.bin",
+            *self.artifact_directory.glob(f"{reference}-*.bin"),
+        ]
+        for artifact in artifacts:
+            if artifact.exists():
+                artifact.unlink()
 
     def _prune(self) -> None:
         cutoff = time.time() - self.retention_days * 86400

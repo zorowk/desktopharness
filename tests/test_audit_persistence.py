@@ -56,3 +56,13 @@ class AuditPersistenceTests(unittest.TestCase):
 
             self.assertFalse((store.directory / "object-1.json").exists())
             self.assertEqual(list(store.artifact_directory.glob("object-1*.bin")), [])
+
+    def test_unserializable_value_is_saved_as_an_explanatory_stub(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = JsonAuditObjectStore(directory)
+            store.put(object(), object_ref="opaque-1")
+
+            reopened = JsonAuditObjectStore(directory)
+            stub = reopened.require("opaque-1")["__audit_unavailable__"]
+            self.assertEqual(stub["value_type"], "builtins.object")
+            self.assertIn("not JSON serializable", stub["reason"])
