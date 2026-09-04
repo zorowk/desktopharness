@@ -2,8 +2,7 @@
 
 （[中文版](README_zh.md)）
 
-This is an [MCP server](https://modelcontextprotocol.io/introduction) that analyzes the screen with [OmniParser](https://github.com/microsoft/OmniParser) and automatically operates the GUI.
-Confirmed on Windows.
+This is an [MCP server](https://modelcontextprotocol.io/introduction) for safe, verifiable desktop automation. Its current implementation is centered on the compositor-neutral AutoUI v2 transaction core; Treeland is the first compositor adapter.
 
 On Treeland, window-tree fusion uses the compositor-provided `treeland-debug --tree`
 command. Ensure `treeland-debug` is available in the MCP server's `PATH`.
@@ -82,10 +81,9 @@ partial execution, rejection, and failure are fed back explicitly. The old HTTP
 compatibility backend still resets a session when it cannot accept execution
 feedback.
 
-The legacy OmniParser tools remain available for comparison tests but are not registered by default. Enable them with `GUI_OMNIPARSER_ENABLED=1` and `OMNI_PARSER_SERVER=host:port`.
+OmniParser is a disabled historical comparison capability, not part of the v2 production execution path. Do not enable its legacy execution tools until it has been refactored as a v2 Evidence/Grounding Provider.
 
-See [Qwen-CUA and Treeland architecture](docs/qwen-cua-architecture.md) for the design and evaluation plan.
-See the [manual test guide](docs/manual-test-guide.md) for safe acceptance and repeatability tests.
+Start with the [documentation index](docs/README.md). Manual acceptance and repeatable tests are defined in the [AutoUI MCP v2 manual acceptance and regression plan](docs/manual-test-guide.md).
 
 ## Codex connection
 

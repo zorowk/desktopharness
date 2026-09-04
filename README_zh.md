@@ -2,8 +2,7 @@
 
 （[中文版](README_zh.md)）
 
-这是一个使用 [OmniParser](https://github.com/microsoft/OmniParser) 解析屏幕并自动操作 GUI 的 [MCP server](https://modelcontextprotocol.io/introduction)。
-已在 Windows 上验证可用。
+这是一个用于安全、可验证桌面自动化的 [MCP server](https://modelcontextprotocol.io/introduction)。当前实现以跨合成器的 AutoUI v2 事务内核为主；Treeland 是首个合成器适配器。
 
 在 Treeland 环境中，窗口树融合使用合成器提供的 `treeland-debug --tree` 命令；请确保运行 MCP 服务的环境中可从 `PATH` 找到 `treeland-debug`。
 
@@ -68,15 +67,16 @@ export CUA_MODEL_TLS_VERIFY=1                 # 仅自签名测试端点才显�
 
 内嵌服务先保存待处理动作提案，只有收到本地实际执行结果后才更新正式 Qwen 历史。成功、部分执行、拒绝和失败都会显式反馈给同一 session，避免模型历史与真实桌面状态分叉。旧 HTTP 兼容后端不支持反馈时，仍会自动重置不一致 session。
 
-OmniParser 旧接口仍保留用于对比测试，但默认不注册。需要启用时配置：
+OmniParser 是默认关闭的历史对照能力，不属于 v2 生产执行路径。它在改造成
+v2 Evidence/Grounding Provider 前，不应启用其旧执行接口：
 
 ```bash
 export GUI_OMNIPARSER_ENABLED=1
 export OMNI_PARSER_SERVER=host:port
 ```
 
-详细设计见 [Qwen-CUA 与 Treeland 协同架构设计](docs/qwen-cua-architecture.md)。
-手工验收和重复测试步骤见 [Qwen-CUA + Treeland 手工测试指南](docs/manual-test-guide.md)。
+当前文档从 [文档导航](docs/README.md) 开始；手工验收和重复测试步骤见
+[AutoUI MCP v2 手工验收与回归计划](docs/manual-test-guide.md)。
 
 ## Codex 连接
 

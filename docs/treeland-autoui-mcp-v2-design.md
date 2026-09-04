@@ -1648,7 +1648,8 @@ v2 至少满足：
 17. 新增合成器只增加 Adapter，新增验证来源只增加 Evidence Provider，新增启动方式只增加 ApplicationLauncher。
 18. 所有跨组件核心对象带 `schema_version`、稳定 ID、来源和必要引用。
 19. 每个失败都有稳定错误码、责任组件和可执行恢复建议；安全拒绝与环境变化不计入组件错误率。
-20. 现有接口在迁移期保持兼容，并可按阶段回退。
+20. 当前公开接口保持紧凑：Qwen 工作流只通过 `gui_run`，不再保留
+    `qwen_cua_*` 兼容工具；历史实验接口不得绕过 v2 事务。
 21. `z_index` 是可选、当前 Snapshot 内 best-effort 字段；Core 的点击安全不能要求所有 Adapter 提供全局完美全序。
 22. Adapter 提供 `hit-test`、`partial-order`、`total-order`、`topmost-only` 或 `unavailable` 中明确的 stacking capability，能力不足时返回 `unknown`。
 23. `ExecutionReceipt.delivered` 始终只表示执行后端接受并注入动作，不能被输入回执或后续 evidence 扩大为应用处理或业务成功。

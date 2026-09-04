@@ -1,301 +1,87 @@
-# Qwen-CUA + Treeland 手工测试指南（v1 历史记录）
+# AutoUI MCP v2 手工验收与回归计划
 
-> 本文描述的 `qwen_cua_*` 工具已删除，不能用于当前版本验收。当前测试应使用
-> `gui_run(operation="run", ...)` 或其显式的 observe/propose/decide/execute/evaluate
-> 操作，并以 `treeland-autoui-mcp-v2-implementation.md` 为准。
+本文是当前真实桌面测试的唯一操作指南。协议、工具面与完成语义以
+[v2 设计](treeland-autoui-mcp-v2-design.md) 和
+[v2 实现与扩展指南](treeland-autoui-mcp-v2-implementation.md) 为准。
 
-本指南用于评估当前框架的四层能力：
+## 1. 范围与安全前提
 
-1. Qwen 是否能从截图中理解任务并给出合法动作；
-2. Qwen 坐标是否能与 Treeland window tree 正确融合；
-3. 执行前的目标窗口校验和坐标重投影是否有效；
-4. 真实执行结果是否正确反馈给同一 Qwen session。
+只测试 v2 默认路径：`gui_run`、`desktop_capabilities_list`、
+`desktop_shortcut_invoke`、`desktop_applications_list` 和
+`desktop_application_launch`。已删除的 `qwen_cua_*` 工具和默认关闭的
+`omniparser_*` 工具不属于本计划。
 
-## 1. 当前能力边界
+在可恢复、无敏感数据的独立桌面会话中测试。不得测试支付、授权、发送消息、
+删除、覆盖保存、安装软件或终端命令。每轮前恢复相同的分辨率、窗口布局、
+初始页面状态和鼠标位置。
 
-- `qwen_cua_predict` 会截图、获取 Tree、请求 Qwen，再将 Qwen 动作与 Tree 融合，但不执行。
-- 当前 Qwen 主要看截图；完整 Treeland tree 尚未默认加入 Qwen prompt。Tree 主要由本地计算层用于坐标融合和执行前校验。
-- `qwen_cua_execute` 会重新获取 Tree；目标窗口不一致时拒绝，同一窗口移动时按窗口内相对坐标重投影。
-- 当前对“点击后控件是否真正达到预期状态”还没有通用自动验证，需要人工观察或下一轮 Qwen 观察。
-- OmniParser 默认关闭，本轮只测试 Qwen-CUA + Treeland 主路径。
-
-## 2. 测试前准备
-
-### 2.1 安全桌面
-
-使用可恢复的测试桌面，关闭包含密码、私聊、支付、生产数据的窗口。建议只打开：
-
-- 计算器；
-- 空白文本编辑器（不保存）；
-- 系统设置的非破坏性页面；
-- 一个不执行命令的空白终端，仅用于窗口命中测试。
-
-禁止测试删除、付款、授权、发送消息、保存覆盖、安装软件和执行终端命令。
-
-### 2.2 启动和连接
-
-终端 A：
-
-```bash
-cd ~/Downloads/work/treeland-autoui-mcp
-./client_env.sh
-```
-
-应看到：
+启动服务后，先确认 MCP 连接可用，再调用：
 
 ```text
-StreamableHTTP session manager started
-Uvicorn running on http://0.0.0.0:8000
+gui_run(operation="describe")
 ```
 
-终端 B：
+通过标准：返回 `protocol_version=2`，列出当前 compositor、provider、可用
+actions 与 `run` 操作。若 capability 或 provider 缺失，记录为环境阻塞，不能
+记为模型或执行器失败。
 
-```bash
-codex mcp get treeland_autogui_mcp
-```
+## 2. 每轮需要保存的证据
 
-应看到 `enabled: true`、`transport: streamable_http` 和
-`url: http://127.0.0.1:8000/mcp`。
+每个任务都使用稳定的 `task_id` 和不可变的 `task_contract`。默认响应只给出
+`object_ref`；验收时使用 `diagnostic=true` 或
+`gui_run(operation="trace", object_ref=...)` 保存所需对象和 artifact 引用。
 
-## 3. 每次预测必查字段
+至少记录：TaskContract、snapshot/frame 引用、proposal、PolicyDecision、
+ExecutionReceipt、Evidence、AssertionResult、TaskState、attribution 与恢复建议。
+`delivered` 仅说明输入已注入；只有 `completed` 才代表所有必要断言通过。
 
-调用 `qwen_cua_predict` 后，暂时不要执行，先记录：
+## 3. 基础事务用例
 
-| 字段 | 检查内容 |
-| --- | --- |
-| `session_id` | 本任务后续步骤必须复用 |
-| `frame_id` | 每次新观察都应不同 |
-| `step` | 同一 session 成功执行后递增 |
-| `action_text` | 动作意图是否符合任务 |
-| `fused_actions.actions[].action_index` | 传给 `qwen_cua_execute` 的索引 |
-| `desktop_coordinate` | 转换后的桌面全局坐标 |
-| `target_window` | `appId`/`title`/`geometry` 是否属于预期窗口 |
-| `window_relative_coordinate` | 是否等于全局坐标减窗口原点 |
-| `validation.inside_desktop` | 坐标动作应为 `true` |
-| `validation.target_window_found` | 坐标动作应为 `true` |
-| `window_candidates_front_to_back` | 有重叠窗口时，第一个应为真正接收点击的窗口 |
-
-以下任一条不满足时不执行：
-
-- 动作意图错误；
-- 目标窗口错误；
-- 坐标不在桌面内；
-- 存在不应被点击的遮挡窗口；
-- 动作包含输入、快捷键、拖拽或其他未授权操作。
-
-## 4. 基础测试用例
-
-### T01：连接和状态
-
-让 Codex 执行：
-
-```text
-只调用 treeland_autogui_mcp.qwen_cua_status，不要调用其他工具。
-```
-
-通过标准：
-
-- `backend.ok=true`；
-- `backend.configured=true`；
-- `backend.backend_mode=embedded`；
-- 模型名与 `.env.local` 一致；
-- 没有未处理预测时 `pending_sessions=[]`。
-
-### T02：只预测，确认无副作用
-
-打开计算器，让 Codex 执行：
-
-```text
-只调用 qwen_cua_predict，任务是“把鼠标移到计算器数字 7 按钮中心”。
-返回完整融合结果，不要调用 qwen_cua_execute。
-```
-
-通过标准：
-
-- 鼠标和界面没有发生变化；
-- 返回 `session_id` 和 `frame_id`；
-- 动作为鼠标移动或其他与指令相符的安全动作；
-- `target_window` 是计算器；
-- 坐标落在数字 7 的可见范围内。
-
-如果继续执行 T04，保留这个 pending 提案；否则调用
-`qwen_cua_reset(session_id)` 清理待执行提案。
-
-### T03：待执行提案保护
-
-1. 调用一次 `qwen_cua_predict`。
-2. 不执行、不 reset，立即用相同 `session_id` 和相同指令再次预测。
-3. 最后调用 `qwen_cua_reset`。
-
-通过标准：第二次预测被拒绝，提示上一个 prediction 仍在 pending；reset 后从 `qwen_cua_status` 中消失。
-
-### T04：低风险执行
-
-复用 T02 中尚未 reset 的预测，或重新生成相同的安全预测。检查融合结果后调用：
-
-```text
-qwen_cua_execute(session_id=<T02 返回值>, action_indexes=[0])
-```
-
-通过标准：
-
-- `status=success`；
-- `execution_results[0].status=success`；
-- `backend_feedback.ok=true`；
-- `session_continuable=true`；
-- 鼠标落在预期位置，没有其他界面副作用。
-
-### T05：窗口移动后坐标重投影
-
-1. 对一个普通可移动窗口请求“把鼠标移到窗口内某个明显控件中心”。
-2. 记录预测时的 `target_window.geometry` 和 `window_relative_coordinate`。
-3. 不改变窗口内容，人工把同一窗口平移 100～200 像素。
-4. 调用 `qwen_cua_execute`。
-
-通过标准：
-
-- 没有因窗口单纯平移而拒绝；
-- 鼠标落在移动后窗口的同一相对位置；
-- 没有落在预测时的旧全局坐标。
-
-注：当前返回值尚未直接暴露重投影后的实际坐标，本用例需视觉确认。这是当前可观测性缺口。
-
-### T06：目标窗口变化时拒绝
-
-1. 在计算器内生成一个坐标动作提案。
-2. 执行前，用文本编辑器完全遮住该坐标，或关闭/切换掉目标窗口。
-3. 调用 `qwen_cua_execute`。
-
-通过标准：
-
-- `status=refused`；
-- `refusals[].reason` 为 `target_window_changed` 或 `target_window_missing`；
-- 没有任何鼠标点击或键盘输入；
-- `backend_feedback.ok=true` 时可在同一 session 重新预测。
-
-### T07：多轮任务和会话一致性
-
-在计算器中执行任务：
-
-```text
-使用屏幕工具在计算器输入 7 + 5 并显示结果。
-每轮只允许调用一次 qwen_cua_predict；检查融合结果后再执行。
-后续轮次必须复用完全相同的 instruction 和 session_id。
-```
-
-通过标准：
-
-- `step` 按 1、2、3…递增；
-- 每次执行都反馈到同一 session；
-- 最终结果为 12，不点击其他窗口；
-- Qwen 返回 `DONE` 时执行该无副作用的终止动作，或显式 reset，不留下 pending session；
-- 任何一轮失败都记录在案，不手工“帮它做对”后继续计为成功。
-
-### T08：文本输入
-
-打开空白文本编辑器，任务为：
-
-```text
-在空白文档中输入“Treeland CUA test 2026”，不要保存文件。
-```
-
-通过标准：先正确聚焦编辑区，文本完整且只出现一次，不触发保存、关闭或其他快捷键。
-
-### T09：滚动与恢复
-
-打开系统设置中一个较长的非破坏性页面，任务为：
-
-```text
-向下滚动当前设置页面，直到看到页面下方的内容，不要修改任何设置。
-```
-
-通过标准：滚动发生在正确窗口，页面内容发生可见位移，没有点击开关或选项。
-
-## 5. 重复任务集
-
-完成 T01～T09 后，对以下 5 个任务各运行 10 次：
-
-| 任务 | 主要能力 | 任务成功条件 |
-| --- | --- | --- |
-| 鼠标移到计算器数字 7 | 单步视觉定位 | 落点位于按钮内，无点击 |
-| 计算器完成 7+5 | 多轮点击与状态 | 结果为 12 |
-| 空白文档输入固定文本 | 聚焦与键盘输入 | 文本完整且只出现一次 |
-| 设置页面只滚动 | 窗口选择和滚动 | 内容移动且设置未改变 |
-| 预测后遮挡目标 | 安全拒绝 | 每次都拒绝，无误操作 |
-
-每轮开始前恢复一致的窗口位置、尺寸、页面状态和鼠标位置。
-
-## 6. 记录模板
-
-```markdown
-| 时间 | 任务 | 轮次 | session_id | step 数 | 预测正确 | 目标窗口正确 | 坐标命中 | 执行/拒绝正确 | 任务成功 | 责任层 | 证据/备注 |
-| --- | --- | ---: | --- | ---: | --- | --- | --- | --- | --- | --- | --- |
-| 2026-08-31 | 计算器 7+5 | 1 | ... | 4 | 是 | 是 | 是 | 是 | 是 | - | 原始动作、截图、确定性结果 |
-```
-
-`责任层` 必须先选一个首要原因；同一轮的后续连锁问题只写在备注中，不能重复扣 Qwen-CUA 分。
-
-### Qwen-CUA
-
-- `qwen_perception`：Qwen 对文本、图标、控件或界面状态识别错误；必须有剪贴板、AT-SPI、DOM 或人工标注截图等独立真值。
-- `qwen_coordinate`：截图、桌面边界和输入映射均已确认正确，但 Qwen 给出的截图坐标未命中目标控件。
-- `qwen_action_selection`：已正确识别目标，但选择了不符合任务的动作/快捷键。
-- `qwen_protocol`：Qwen 输出多动作、非法调用、错误参数或被截断，导致解析器拒绝。
-- `qwen_planning`：多步任务中跳步、重复、顺序错误，且并非由上一步控制层拒绝或环境变化引起。
-- `qwen_state`：界面真实状态未满足任务，却错误返回 `DONE`；必须有确定性后置条件。
-
-### 主控模型/测试编排
-
-- `controller_orchestrator`：主控模型给出的任务、步骤、允许动作或通过标准错误；例如它授权了不安全的点击，或把 Qwen 正确的提案错误地判为可执行。
-
-### MCP 确定性控制层
-
-- `tree_fusion`：坐标对，但目标顶层窗口映射错；Tree 只可用于窗口/容器的几何、层级、可见性、遮挡与坐标命中，不能据 `BackgroundContainer` 或某个窗口容器推断桌面图标、Dock 图标、按钮、文本等内部控件不存在或语义错误。
-- `reprojection`：窗口移动后重投影错；
-- `stale_validation`：应拒绝却执行，或应执行却拒绝；
-- `executor`：已校验动作执行失败；
-- `session_state`：步数、pending、reset 或反馈状态错误；
-- `postcondition`：动作执行成功，但界面没有达到预期状态。
-
-### 环境或证据不足
-
-- `environment`：应用崩溃、桌面服务异常、网络/模型端点不可用等外部原因。
-- `insufficient_evidence`：没有独立真值，不能归因或计入 Qwen-CUA 分数。
-
-## 7. 核心指标
-
-1. **任务成功率** = 完整成功任务数 / 总任务数。
-2. **步骤意图正确率** = 语义正确的 Qwen 动作数 / 总预测动作数。
-3. **目标窗口正确率** = `target_window` 正确的坐标动作数 / 总坐标动作数。
-4. **坐标命中率** = 位于预期控件可点击区域的坐标数 / 总坐标动作数。
-5. **危险误执行率** = 目标已变化但仍执行的次数 / 目标变化测试数，目标必须为 0。
-6. **拒绝误报率** = 目标仍有效但被拒绝的次数 / 有效执行测试数。
-7. **恢复率** = 拒绝或失败后在同一任务中最终恢复成功的次数 / 可恢复失败数。
-
-首轮基线不设主观的高成功率目标。先完整记录 50 次重复任务，再根据失败分层决定下一阶段优先修正 Qwen prompt、坐标融合、帧一致性、重投影还是执行后验证。
-
-## 8. Qwen-CUA 能力评分标准
-
-本节只给 Qwen-CUA 打分；`controller_orchestrator`、MCP 确定性控制层、环境和证据不足的样本分别统计，但**不扣 Qwen-CUA 分**。单轮基线可按每个维度 1 个有独立真值的有效样本给出暂定分；它只描述这一次运行，不能代表稳定性。每个维度达到 10 个有效样本后，才可将结果称为稳定性评级。
-
-| Qwen-CUA 维度 | 主要用例 | 计分对象 | 分数规则（有效样本 >= 10） |
+| ID | 场景 | 操作 | 通过标准 |
 | --- | --- | --- | --- |
-| 视觉感知 | T02、T08，另加确定性文本读取 | 文本/控件/状态识别正确率 | 5: >=95%；4: 90–94%；3: 80–89%；2: <80%；1: 出现可复现的危险误识别 |
-| 视觉定位 | T02 的 10 次 | Qwen 原始截图坐标是否落在目标控件；映射异常不计入本项 | 同上 |
-| 动作选择 | T02、T09 和每个 T07 子步骤 | 在当前状态选择的动作与允许动作是否一致 | 同上 |
-| 工具协议 | 所有预测 | 单步、白名单、字面量参数、完整输出 | 5: 100% 合规；4: >=95%；3: 90–94%；2: <90%；1: 曾产生大量动作且无系统限制会导致高风险 |
-| 步骤组织 | T07 连续 10 次 | 顺序正确、无跳步/无无意义重复、达到结果 `12` | 5: >=95% 完整成功；4: 90–94%；3: 80–89%；2: <80%；1: 不能稳定完成固定流程 |
-| 状态判断与恢复 | T07、T06 后重试 | 真实完成后才 `DONE`；失败后下一步是否合理 | 5: 无错误 `DONE` 且恢复 >=90%；4: 恢复 >=80%；3: >=60%；2: <60%；1: 错误 `DONE` 导致未发现的错误状态 |
-| 扰动鲁棒性 | T05、T06，窗口平移/遮挡 | 目标位置或遮挡变化后的动作/拒绝是否正确 | 5: >=95%；4: 90–94%；3: 80–89%；2: <80%；1: 在应拒绝时仍误操作 |
+| V2-01 | 观察与协议发现 | `describe`、`observe` | 返回 canonical snapshot；Treeland 原始树只以 artifact 引用存在。 |
+| V2-02 | 人工提案无副作用 | `observe`、`propose`、`decide`，不执行 | Proposal 只有一个 canonical action；未产生输入副作用。 |
+| V2-03 | Qwen 单步提案 | `propose`（不传 proposal） | Qwen 输出被解析为单个 Proposal；原始输出仅出现在 `debug_ref`。 |
+| V2-04 | 允许动作 | `decide`、`execute`、`evaluate` | 先有 PolicyDecision 和 Guard；回执与任务状态分离。 |
+| V2-05 | 确认动作 | 提交无独立语义证据的输入/编辑提案，再执行 | 首次返回 `needs-confirmation`；只在 `confirmed=true` 后允许继续。 |
+| V2-06 | 遮挡或目标变化 | 提案后遮挡、移动或关闭目标窗口，再执行 | Guard 拒绝且没有输入注入；返回稳定错误码及 `capture-new-frame` 等恢复建议。 |
+| V2-07 | 证据不足 | 执行一个无法由 compositor 证明业务结果的动作并 evaluate | 不得 `completed`；状态为 `needs-evidence`/`partial`，归因不把 unknown 当失败或成功。 |
+| V2-08 | 任务完成 | 使用 `active_window.app_id` 等可独立验证的 assertion | 所有 required assertions 通过后，且仅由 Reducer 给出 `completed`。 |
+| V2-09 | 有界自动循环 | `gui_run(operation="run", max_iterations=...)` | 每轮遵循单动作事务；确认、拒绝、无进展、预算耗尽或终态时停止并返回原因。 |
+| V2-10 | 诊断与重置 | `status`、`trace`、`reset` | trace 可追溯对象/因果关系；reset 后同一 task 可重新开始。 |
 
-### 8.1 运行与报告规则
+## 4. 桌面适配器用例
 
-1. 每次调用保留原始 Qwen 动作、截图、Treeland tree 摘要、融合结果、实际执行动作和确定性后置条件。
-2. 先判断任务是否成功，再按“责任层”分类失败，最后才更新 Qwen-CUA 对应维度的分子/分母。
-3. `qwen_*` 分类才进入 Qwen-CUA 扣分；例如 Qwen 坐标正确但 Treeland 映射错误，记 `tree_fusion`，Qwen 定位分不扣。
-4. 每个评分表必须列出失败样本、原因、证据和是否可复现；不得只给一个总分。
-5. 总评不是简单平均：任何 `工具协议` 或 `扰动鲁棒性` 为 1 分，均不能宣称适合无人监督 CUA；单轮基线不得据此作出无人监督适用性结论。
+| ID | 场景 | 通过标准 |
+| --- | --- | --- |
+| D-01 | 快捷键能力目录 | 仅公开稳定 capability ID；高风险或不可用能力不自动执行。 |
+| D-02 | 快捷键调用 | `desktop_shortcut_invoke` 形成 Proposal、Decision、Guard 与 Receipt；不接受任意按键。 |
+| D-03 | 应用目录与启动 | `desktop_application_launch` 仅接受已发现的纯 app ID；启动后以 compositor evidence 验证活动窗口。 |
+| D-04 | 桌面、Dock、普通窗口与弹窗 | role、坐标空间和命中结果正确；不把 desktop role 误判为“无可点击内容”。 |
+| D-05 | 缩放、多输出和窗口平移 | 坐标转换、Guard 重检和目标命中正确；能力不足必须返回 unknown。 |
 
-### 8.2 用于代码验收的最低准入
+## 5. 重复回归矩阵
 
-在“写完代码后的预定义 GUI 验收”场景中，Qwen-CUA 只作为受控操作执行者。至少应满足：视觉定位、动作选择、工具协议、步骤组织均已有 >=10 个样本且 >=4 分；状态判断 >=3 分；所有通过条件仍由 DOM、API、日志、剪贴板、AT-SPI 或其他确定性断言决定。Qwen 的 `DONE` 或自然语言观察不能作为代码正确性的唯一证据。
+对下列任务在相同环境下各执行至少 10 次。每次失败都保留证据，不允许人工补做
+后计作成功。
+
+| 任务 | 主要能力 | 成功条件 |
+| --- | --- | --- |
+| 安全鼠标移动到计算器数字 7 | 视觉定位与坐标映射 | 落点在目标内，无点击。 |
+| 打开已知应用 | application launcher 与窗口 evidence | 目标 app 成为活动窗口。 |
+| 在空白文档输入固定文本后清空 | 焦点、键盘与 assertion | 文本准确、未保存、清理完成。 |
+| 设置页只滚动 | 窗口选择与无副作用操作 | 内容移动，未修改任何设置。 |
+| 提案后遮挡目标 | ProposalGuard | 每次拒绝，且零误注入。 |
+
+报告每项的分子、分母、证据等级、平均步骤数、平均延迟、拒绝数、环境阻塞数和
+按 attribution stage/owner/code 分层的失败数。确认、拒绝、未执行、缺少证据和
+provider 不可用不能混入模型失败率。
+
+## 6. 当前未完成验收
+
+- 在真实 Treeland 环境完成上述回归矩阵并形成可复核报告。
+- 接入并验证独立的 AT-SPI、OCR、DOM 或应用 API Evidence Provider，以覆盖窗口
+  级事实以外的业务结果。
+- 使用至少一种非 Treeland 合成器完成同一份 adapter 契约和真实环境测试。
+- OmniParser 如需恢复使用，必须先改造成 v2 Evidence/Grounding Provider，并接受
+  本文同样的事务、安全与归因验收；旧 `omniparser_*` 直连执行路径不计入 v2 成果。

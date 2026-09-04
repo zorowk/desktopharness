@@ -22,7 +22,7 @@ Not migrated:
 - FastAPI/uvicorn transport;
 - non-CUA agents and their dependencies;
 - trajectory images, historical logs, caches and native client utilities;
-- rollout voting (kept as a later experiment in `play.md`).
+- rollout voting (a later experiment; track it in the v2 regression and extension documentation).
 
 Default configuration uses `CUA_BACKEND_MODE=embedded`. Model configuration is
 read from `CUA_MODEL_BASE_URL`, `CUA_MODEL`, `CUA_MODEL_API_KEY`,
