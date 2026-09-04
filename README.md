@@ -8,6 +8,31 @@ Confirmed on Windows.
 On Treeland, window-tree fusion uses the compositor-provided `treeland-debug --tree`
 command. Ensure `treeland-debug` is available in the MCP server's `PATH`.
 
+## AutoUI v2 generic transaction core
+
+The server now also registers the compositor-neutral `gui_run` facade. Its
+core depends only on canonical models and replaceable ports; Treeland,
+Qwen-CUA, PyAutoGUI, Deepin keybindings, and `dde-am` are adapters selected by
+the application composition root.
+
+The explicit v2 flow is:
+
+1. `gui_run(operation="observe", task_contract=...)`
+2. `gui_run(operation="propose", task_id=...)` for Qwen, or submit one controller proposal with the same operation
+3. `gui_run(operation="decide", task_id=..., proposal_id=...)`
+4. `gui_run(operation="execute", task_id=..., proposal_id=...)`
+5. `gui_run(operation="evaluate", task_id=...)`
+
+Normal responses are compact envelopes containing an `object_ref`. Use
+`gui_run(operation="trace", object_ref=...)` for diagnostic expansion. The
+default policy requires confirmation when an action has no independent
+semantic evidence; a model's `semantic_intent` is only a claim. An execution
+receipt with `status=delivered` confirms input injection, not application or
+task success.
+
+See the [v2 implementation and extension guide](docs/treeland-autoui-mcp-v2-implementation.md)
+and the [v2 design](docs/treeland-autoui-mcp-v2-design.md).
+
 ## Qwen-CUA
 
 The default path uses the embedded Qwen-CUA service in this project; the
@@ -31,6 +56,9 @@ The Qwen tools use an explicit two-stage flow:
 1. Call `qwen_cua_predict(instruction)` to receive a `session_id`, proposed Qwen actions, and deterministic Treeland window context. Prediction does not execute actions.
 2. Inspect `fused_actions`, then call `qwen_cua_execute(session_id, action_indexes)` to execute all or selected allowlisted actions.
 3. Call `qwen_cua_predict` again with the same session for the next step. Use a new session or call `qwen_cua_reset` for a new task.
+
+These `qwen_cua_*` tools remain migration-compatible. New integrations should
+use `gui_run`; its Qwen adapter rejects multi-action proposals.
 
 For tasks with a window-level completion condition, such as opening an
 application, pass `expected_active_app_id="deepin-editor"` on the first

@@ -4,7 +4,7 @@
 
 本设计用于重新划分主控、MCP 确定性逻辑层和 Qwen-CUA 图形识别层的职责，使三者能够协作完成安全、可验证的桌面操作。v2 的核心协议不绑定 Treeland：任何能提供窗口树和光标位置的合成器都可以接入；Treeland 只是第一个适配器实现。
 
-本文描述目标架构，不表示相关接口已经全部实现。现有 `qwen_cua_predict`、`qwen_cua_execute`、`qwen_cua_reset` 和 `qwen_cua_status` 在迁移期间继续保留。
+本文描述目标架构。项目已落地 v2 通用事务内核和 compact facade 的基础实现；具体实现范围、扩展方式和迁移边界见 `treeland-autoui-mcp-v2-implementation.md`。现有 `qwen_cua_predict`、`qwen_cua_execute`、`qwen_cua_reset` 和 `qwen_cua_status` 在迁移期间继续保留。
 
 需要解决的主要问题：
 

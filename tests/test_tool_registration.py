@@ -117,6 +117,7 @@ class ToolRegistrationTests(unittest.TestCase):
 
         self.assertIn("qwen_cua_predict", mcp.tools)
         self.assertIn("qwen_cua_execute", mcp.tools)
+        self.assertIn("gui_run", mcp.tools)
         self.assertIn("desktop_capabilities_list", mcp.tools)
         self.assertIn("desktop_shortcut_invoke", mcp.tools)
         self.assertIn("desktop_applications_list", mcp.tools)

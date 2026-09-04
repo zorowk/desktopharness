@@ -21,6 +21,27 @@ import PIL
 import requests
 from .qwen_actions import execute_parsed_actions, parse_qwen_actions, set_absolute_coordinate
 from .qwen_backend import QwenBackendClient
+from .adapters.application_launcher import DdeApplicationLauncher
+from .adapters.compositor import TreelandAdapter
+from .adapters.evidence import CompositorWindowEvidenceProvider
+from .adapters.executor import PyAutoGUIExecutor
+from .adapters.frame import PyAutoGUIFrameProvider
+from .adapters.platform import DeepinKeybindingProvider
+from .adapters.proposal import QwenCUAProposalProvider
+from .core.models import (
+    Action,
+    ActionProposal,
+    ActionType,
+    AssertionSpec,
+    Point,
+    TaskContract,
+    TaskLimits,
+    TaskPermissions,
+    new_id,
+)
+from .core.orchestrator import CoreOrchestrator
+from .core.store import ObjectStore
+from .facade import GuiRunFacade
 from .desktop_capabilities import (
     find_capability,
     load_desktop_application_catalogue,
@@ -783,6 +804,47 @@ def mcp_autogui_main(mcp):
     qwen_sessions = {}
     qwen_sessions_lock = threading.RLock()
 
+    v2_store = ObjectStore()
+    v2_compositor = TreelandAdapter(
+        tree_reader=lambda: get_treeland_layout_tree(),
+        cursor_reader=pyautogui.position,
+        artifact_store=v2_store,
+    )
+    v2_platform = DeepinKeybindingProvider(
+        loader=lambda: load_keybinding_catalogue(),
+        resolver=lambda capability_id: find_capability(capability_id),
+    )
+
+    def v2_coordinate_mapper(point, coordinate_space, proposal):
+        if coordinate_space != "desktop-logical":
+            raise ValueError("unsupported executor coordinate space")
+        current = v2_store.require(proposal.based_on_snapshot)
+        width, height = pyautogui.size()
+        bounds = current.coordinate_space.bounds
+        return Point(
+            (point.x - bounds.x) * float(width) / bounds.width,
+            (point.y - bounds.y) * float(height) / bounds.height,
+        )
+
+    v2_launcher = DdeApplicationLauncher(
+        runner=lambda *args, **kwargs: subprocess.run(*args, **kwargs)
+    )
+    v2_runtime = CoreOrchestrator(
+        v2_compositor,
+        PyAutoGUIExecutor(
+            pyautogui,
+            coordinate_mapper=v2_coordinate_mapper,
+            platform_resolver=v2_platform.resolve,
+        ),
+        proposal_provider=QwenCUAProposalProvider(qwen_backend, v2_store),
+        frame_provider=PyAutoGUIFrameProvider(pyautogui, v2_store),
+        application_launcher=v2_launcher,
+        evidence_providers=(CompositorWindowEvidenceProvider(),),
+        policy_providers=(v2_platform,),
+        store=v2_store,
+    )
+    v2_facade = GuiRunFacade(v2_runtime)
+
     def record_qwen_execution(session_id, status, execution=None, reason=None):
         recorder = getattr(qwen_backend, "record_execution", None)
         if not callable(recorder):
@@ -807,6 +869,38 @@ def mcp_autogui_main(mcp):
         screenshot.save(screenshot_buffer, format="PNG")
         tree = get_treeland_layout_tree()
         return screenshot_buffer.getvalue(), screenshot.size, tree
+
+    @mcp.tool()
+    async def gui_run(
+        operation: str,
+        task_id: str = '',
+        task_contract: dict | None = None,
+        proposal: dict | None = None,
+        proposal_id: str = '',
+        confirmed: bool = False,
+        strategy: str = 'compact',
+        object_ref: str = '',
+        diagnostic: bool = False,
+    ) -> dict:
+        """Run one compact AutoUI v2 protocol operation.
+
+        Operations are ``describe``, ``observe``, ``propose``, ``decide``,
+        ``execute``, ``evaluate`` (or ``verify``), ``status``, ``reset``, and
+        ``trace``.  Normal responses return object references; pass
+        ``diagnostic=true`` or use ``trace`` to expand an object.
+        """
+        return await asyncio.to_thread(
+            v2_facade.handle,
+            operation,
+            task_id=task_id,
+            task_contract=task_contract,
+            proposal=proposal,
+            proposal_id=proposal_id,
+            confirmed=confirmed,
+            strategy=strategy,
+            object_ref=object_ref,
+            diagnostic=diagnostic,
+        )
 
     @mcp.tool()
     async def desktop_capabilities_list(category: str = '') -> list[dict]:
@@ -847,11 +941,43 @@ def mcp_autogui_main(mcp):
         if not hotkeys:
             raise ValueError("desktop capability has no keyboard shortcut")
         keys = hotkeys[0]
-        before = _active_window_summary(get_treeland_layout_tree())
-        if len(keys) == 1:
-            pyautogui.press(keys[0])
-        else:
-            pyautogui.hotkey(*keys)
+        task_id = new_id("legacy-shortcut-task")
+        v2_runtime.register_task(
+            TaskContract(
+                task_id=task_id,
+                goal=f"Invoke platform capability {capability_id}",
+                permissions=TaskPermissions(
+                    frozenset({ActionType.PLATFORM_INVOKE}),
+                    frozenset({"navigation"}),
+                ),
+                limits=TaskLimits(max_steps=1, max_retries=0),
+            )
+        )
+        observed = v2_runtime.observe(task_id)
+        raw_before = v2_store.require(observed.raw_artifact_ref)
+        before = _active_window_summary(raw_before)
+        proposal = ActionProposal(
+            proposal_id=new_id("proposal"),
+            source="legacy-desktop-shortcut-facade",
+            based_on_snapshot=observed.snapshot_id,
+            action=Action(
+                ActionType.PLATFORM_INVOKE,
+                parameters={"capability_id": capability_id.strip()},
+            ),
+        )
+        v2_runtime.submit_proposal(task_id, proposal)
+        decision = v2_runtime.decide(proposal.proposal_id)
+        if decision.status.value != "allow":
+            raise PermissionError(f"v2 policy refused shortcut: {decision.reason_code}")
+        receipt = v2_runtime.execute(proposal.proposal_id)
+        if receipt.status.value != "delivered":
+            return {
+                "status": "failed",
+                "capability": capability,
+                "executed_keys": [],
+                "reason": receipt.error_code,
+                "v2": {"task_id": task_id, "proposal_id": proposal.proposal_id, "execution_id": receipt.execution_id},
+            }
         _, _, post_tree, evidence = _capture_post_action_frame(
             capture_qwen_frame,
             get_treeland_layout_tree,
@@ -867,6 +993,7 @@ def mcp_autogui_main(mcp):
                 "active_window_after": _active_window_summary(post_tree),
                 "observation": evidence,
             },
+            "v2": {"task_id": task_id, "proposal_id": proposal.proposal_id, "execution_id": receipt.execution_id},
         }
 
     @mcp.tool()
@@ -905,34 +1032,56 @@ def mcp_autogui_main(mcp):
         resolved_app_id = validate_application_id(app_id)
         expected_app_id = _expected_active_app_id(expected_active_app_id)
         timeout_s = _application_wait_timeout(application_wait_timeout_s)
-        active_before = _active_window_summary(get_treeland_layout_tree())
-        try:
-            result = await asyncio.to_thread(
-                subprocess.run,
-                ["dde-am", resolved_app_id],
-                capture_output=True,
-                text=True,
-                timeout=10,
-                check=False,
+        task_id = new_id("legacy-application-task")
+        assertions = (
+            AssertionSpec(
+                "application-active",
+                "active_window.app_id",
+                "equals",
+                expected_app_id,
+            ),
+        ) if expected_app_id else ()
+        v2_runtime.register_task(
+            TaskContract(
+                task_id=task_id,
+                goal=f"Launch application {resolved_app_id}",
+                permissions=TaskPermissions(
+                    frozenset({ActionType.APPLICATION_LAUNCH}),
+                    frozenset({"open_application"}),
+                ),
+                assertions=assertions,
+                limits=TaskLimits(max_steps=1, max_retries=0),
+                verification_profile="application-open",
             )
-        except FileNotFoundError as exc:
-            raise RuntimeError("dde-am is not installed") from exc
-        except subprocess.TimeoutExpired as exc:
+        )
+        observed = await asyncio.to_thread(v2_runtime.observe, task_id)
+        active_before = _active_window_summary(v2_store.require(observed.raw_artifact_ref))
+        proposal = ActionProposal(
+            proposal_id=new_id("proposal"),
+            source="legacy-application-launch-facade",
+            based_on_snapshot=observed.snapshot_id,
+            action=Action(
+                ActionType.APPLICATION_LAUNCH,
+                parameters={"app_id": resolved_app_id},
+            ),
+            semantic_intent="open_application",
+            expected_effect={"active_app_id": expected_app_id} if expected_app_id else {},
+        )
+        v2_runtime.submit_proposal(task_id, proposal)
+        decision = v2_runtime.decide(proposal.proposal_id)
+        if decision.status.value != "allow":
+            raise PermissionError(f"v2 policy refused application launch: {decision.reason_code}")
+        receipt = await asyncio.to_thread(v2_runtime.execute, proposal.proposal_id)
+        result = v2_launcher.result_for(proposal.proposal_id)
+        if receipt.status.value != "delivered":
             return {
                 "status": "failed",
                 "app_id": resolved_app_id,
-                "reason": "dde-am launch timed out",
-                "stdout": exc.stdout,
-                "stderr": exc.stderr,
-            }
-
-        if result.returncode != 0:
-            return {
-                "status": "failed",
-                "app_id": resolved_app_id,
-                "returncode": result.returncode,
-                "stdout": result.stdout,
-                "stderr": result.stderr,
+                "returncode": getattr(result, "returncode", None),
+                "stdout": getattr(result, "stdout", None),
+                "stderr": getattr(result, "stderr", None),
+                "reason": receipt.error_code,
+                "v2": {"task_id": task_id, "proposal_id": proposal.proposal_id, "execution_id": receipt.execution_id},
             }
 
         _, _, post_tree, application_wait = _capture_post_action_frame(
@@ -948,6 +1097,7 @@ def mcp_autogui_main(mcp):
             active_after,
             application_wait,
         )
+        _, assertion_results, v2_state = await asyncio.to_thread(v2_runtime.evaluate, task_id)
         return {
             "status": (
                 "success"
@@ -955,15 +1105,22 @@ def mcp_autogui_main(mcp):
                 else "partial"
             ),
             "app_id": resolved_app_id,
-            "returncode": result.returncode,
-            "stdout": result.stdout,
-            "stderr": result.stderr,
+            "returncode": getattr(result, "returncode", 0),
+            "stdout": getattr(result, "stdout", ""),
+            "stderr": getattr(result, "stderr", ""),
             "evidence": {
                 "active_window_before": active_before,
                 "active_window_after": active_after,
                 "application_wait": application_wait,
             },
             "task_validation": task_validation,
+            "v2": {
+                "task_id": task_id,
+                "proposal_id": proposal.proposal_id,
+                "execution_id": receipt.execution_id,
+                "assertion_statuses": [item.status.value for item in assertion_results],
+                "task_status": v2_state.status.value,
+            },
         }
 
     @mcp.tool()

@@ -7,6 +7,27 @@
 
 在 Treeland 环境中，窗口树融合使用合成器提供的 `treeland-debug --tree` 命令；请确保运行 MCP 服务的环境中可从 `PATH` 找到 `treeland-debug`。
 
+## AutoUI v2 通用事务内核
+
+服务现在默认注册跨合成器的 `gui_run` facade。核心只依赖 Canonical Model
+和可替换 port；Treeland、Qwen-CUA、PyAutoGUI、Deepin 快捷键和 `dde-am`
+都位于 adapter 或应用装配层，不进入核心。
+
+v2 显式调用流程为：
+
+1. `gui_run(operation="observe", task_contract=...)`
+2. 使用 `gui_run(operation="propose", task_id=...)` 请求 Qwen，或通过同一操作提交一个主控 Proposal
+3. `gui_run(operation="decide", task_id=..., proposal_id=...)`
+4. `gui_run(operation="execute", task_id=..., proposal_id=...)`
+5. `gui_run(operation="evaluate", task_id=...)`
+
+正常响应只返回包含 `object_ref` 的紧凑信封；诊断时使用
+`gui_run(operation="trace", object_ref=...)` 展开对象。默认策略在缺少独立语义证据时要求确认，模型给出的 `semantic_intent` 只作为 claim。
+`ExecutionReceipt.status=delivered` 只表示输入已注入，不表示应用响应或任务完成。
+
+参见 [v2 实现与扩展指南](docs/treeland-autoui-mcp-v2-implementation.md)
+和 [v2 设计](docs/treeland-autoui-mcp-v2-design.md)。
+
 ## Qwen-CUA
 
 默认操作链路使用本项目内嵌的 Qwen-CUA 服务，不需要启动 `gui-mcp` 后端。只需配置实际的 OpenAI-compatible Qwen 模型端点：
@@ -26,6 +47,9 @@ Qwen-CUA 工具采用显式的两阶段流程：
 1. 调用 `qwen_cua_predict(instruction)` 获取一个 `session_id`、Qwen 动作步骤，以及动作坐标与 Treeland window tree 的融合结果。此调用不会执行动作。
 2. 检查 `fused_actions` 中的目标窗口和校验信息，然后调用 `qwen_cua_execute(session_id, action_indexes)` 执行全部或选定动作。
 3. 使用同一个 `session_id` 再次调用 `qwen_cua_predict` 获取下一步。新任务应使用新的 session，或先调用 `qwen_cua_reset`。
+
+这些 `qwen_cua_*` 工具作为迁移兼容接口继续保留。新集成应使用
+`gui_run`；其 Qwen adapter 会拒绝多动作 Proposal。
 
 打开应用等具有窗口级完成条件的任务，可以在首次预测时传入
 `expected_active_app_id="deepin-editor"`。执行动作后，MCP 会在
