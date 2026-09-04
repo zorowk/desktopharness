@@ -18,12 +18,9 @@ from mcp.server.fastmcp import Image
 import PIL
 import requests
 from .qwen_backend import QwenBackendClient
-from .adapters.application_launcher import DdeApplicationLauncher
-from .adapters.compositor import TreelandAdapter
 from .adapters.evidence import CompositorWindowEvidenceProvider, OmniParserEvidenceProvider
 from .adapters.executor import PyAutoGUIExecutor
 from .adapters.frame import PyAutoGUIFrameProvider
-from .adapters.platform import DeepinKeybindingProvider
 from .adapters.proposal import QwenCUAProposalProvider
 from .core.models import (
     Action,
@@ -38,6 +35,7 @@ from .core.models import (
 )
 from .core.orchestrator import CoreOrchestrator
 from .core.audit import audit_components_from_environment
+from .desktop_backend import DEFAULT_DESKTOP_BACKEND, create_desktop_backend
 from .facade import GuiRunFacade
 from .desktop_capabilities import (
     find_capability,
@@ -718,21 +716,21 @@ def register_omniparser_tools(mcp):
         await asyncio.sleep(time)
 
 
-def mcp_autogui_main(mcp):
+def mcp_autogui_main(mcp, *, desktop_backend_kind: str = DEFAULT_DESKTOP_BACKEND):
     qwen_backend = QwenBackendClient()
     backend_close = getattr(qwen_backend, "close", None)
     if callable(backend_close):
         atexit.register(backend_close)
     store, ledger = audit_components_from_environment()
-    compositor = TreelandAdapter(
+    desktop_backend = create_desktop_backend(
+        desktop_backend_kind,
         tree_reader=lambda: get_treeland_layout_tree(),
         cursor_reader=pyautogui.position,
         artifact_store=store,
+        capability_loader=lambda: load_keybinding_catalogue(),
+        capability_resolver=lambda capability_id: find_capability(capability_id),
     )
-    platform_policy = DeepinKeybindingProvider(
-        loader=lambda: load_keybinding_catalogue(),
-        resolver=lambda capability_id: find_capability(capability_id),
-    )
+    compositor = desktop_backend.compositor
 
     def coordinate_mapper(point, coordinate_space, proposal):
         if coordinate_space != "desktop-logical":
@@ -744,10 +742,6 @@ def mcp_autogui_main(mcp):
             (point.x - bounds.x) * float(width) / bounds.width,
             (point.y - bounds.y) * float(height) / bounds.height,
         )
-
-    launcher = DdeApplicationLauncher(
-        runner=lambda *args, **kwargs: subprocess.run(*args, **kwargs)
-    )
 
     def drag_handler(proposal, point):
         width, height = pyautogui.size()
@@ -789,14 +783,14 @@ def mcp_autogui_main(mcp):
         PyAutoGUIExecutor(
             pyautogui,
             coordinate_mapper=coordinate_mapper,
-            platform_resolver=platform_policy.resolve,
+            platform_resolver=desktop_backend.platform_resolver,
             drag_handler=drag_handler,
         ),
         proposal_provider=QwenCUAProposalProvider(qwen_backend, store),
         frame_provider=PyAutoGUIFrameProvider(pyautogui, store),
-        application_launcher=launcher,
+        application_launcher=desktop_backend.application_launcher,
         evidence_providers=tuple(evidence_providers),
-        policy_providers=(platform_policy,),
+        policy_providers=desktop_backend.policy_providers,
         store=store,
         ledger=ledger,
     )

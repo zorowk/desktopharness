@@ -131,6 +131,11 @@ class FakeExecutor:
 
 
 class CanonicalAdapterTests(unittest.TestCase):
+    def test_treeland_backend_provides_its_application_launcher(self):
+        adapter = TreelandAdapter(lambda: {"layers": []})
+
+        self.assertEqual(adapter.application_launcher.launcher_id, "dde-am")
+
     def test_treeland_adapter_filters_raw_fields_and_keeps_artifact_reference(self):
         raw = {
             "currentMode": "Normal",

@@ -28,7 +28,7 @@ license = {text = "MIT License"}
 license-files = ["LICENSE"]
 
 [project.scripts]
-treeland-autogui-mcp = "mcp_autogui:main"
+treeland-autogui-mcp = "mcp_autogui:cli_main"
 autoui-audit = "mcp_autogui.audit_cli:main"
 
 [tool.hatch.build.targets.wheel]

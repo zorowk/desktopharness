@@ -1,4 +1,4 @@
 from .canonical import CanonicalJsonAdapter
-from .treeland import TreelandAdapter
+from .treeland import DdeApplicationLauncher, TreelandAdapter
 
-__all__ = ["CanonicalJsonAdapter", "TreelandAdapter"]
+__all__ = ["CanonicalJsonAdapter", "DdeApplicationLauncher", "TreelandAdapter"]

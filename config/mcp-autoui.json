@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "transport": {
+    "mode": "streamable-http",
+    "host": "0.0.0.0",
+    "port": 8651
+  },
+  "desktop_backend": {
+    "kind": "treeland-deepin"
+  },
+  "proposal_provider": {
+    "kind": "qwen-cua",
+    "mode": "embedded",
+    "model": "qwen3_rl",
+    "base_url": "http://127.0.0.1:8000/v1",
+    "timeout_seconds": 120,
+    "tls_verify": true
+  },
+  "evidence_providers": {
+    "compositor_window": {
+      "enabled": true
+    },
+    "omniparser": {
+      "enabled": false,
+      "endpoint": ""
+    }
+  },
+  "audit": {
+    "directory": "",
+    "retention_days": 7,
+    "max_gib": 16
+  }
+}
