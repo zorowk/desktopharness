@@ -81,7 +81,7 @@ partial execution, rejection, and failure are fed back explicitly. The old HTTP
 compatibility backend still resets a session when it cannot accept execution
 feedback.
 
-OmniParser is a disabled historical comparison capability, not part of the v2 production execution path. Do not enable its legacy execution tools until it has been refactored as a v2 Evidence/Grounding Provider.
+OmniParser is disabled by default. When enabled, it is a read-only v2 Evidence/Grounding Provider: it registers no legacy direct-execution tools and cannot bypass Proposal, PolicyDecision, Guard, Receipt, or Assertion processing.
 
 Start with the [documentation index](docs/README.md). Manual acceptance and repeatable tests are defined in the [AutoUI MCP v2 manual acceptance and regression plan](docs/manual-test-guide.md).
 

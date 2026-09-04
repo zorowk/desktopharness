@@ -83,5 +83,6 @@ provider 不可用不能混入模型失败率。
 - 接入并验证独立的 AT-SPI、OCR、DOM 或应用 API Evidence Provider，以覆盖窗口
   级事实以外的业务结果。
 - 使用至少一种非 Treeland 合成器完成同一份 adapter 契约和真实环境测试。
-- OmniParser 如需恢复使用，必须先改造成 v2 Evidence/Grounding Provider，并接受
-  本文同样的事务、安全与归因验收；旧 `omniparser_*` 直连执行路径不计入 v2 成果。
+- OmniParser 已作为默认关闭的只读 Evidence/Grounding Provider 接入；仍需在真实桌面
+  中验证其控件/文档证据的准确性、延迟与归因。旧 `omniparser_*` 直连执行路径不注册，
+  也不计入 v2 成果。

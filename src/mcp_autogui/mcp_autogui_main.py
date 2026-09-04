@@ -20,7 +20,7 @@ import requests
 from .qwen_backend import QwenBackendClient
 from .adapters.application_launcher import DdeApplicationLauncher
 from .adapters.compositor import TreelandAdapter
-from .adapters.evidence import CompositorWindowEvidenceProvider
+from .adapters.evidence import CompositorWindowEvidenceProvider, OmniParserEvidenceProvider
 from .adapters.executor import PyAutoGUIExecutor
 from .adapters.frame import PyAutoGUIFrameProvider
 from .adapters.platform import DeepinKeybindingProvider
@@ -761,6 +761,24 @@ def mcp_autogui_main(mcp):
         store.put(result, prefix="window-gesture")
         return True
 
+    evidence_providers = [CompositorWindowEvidenceProvider()]
+    if _env_enabled("GUI_OMNIPARSER_ENABLED"):
+        endpoint = os.environ.get("OMNI_PARSER_SERVER", "").strip()
+        if not endpoint:
+            raise RuntimeError(
+                "OMNI_PARSER_SERVER is required when GUI_OMNIPARSER_ENABLED is enabled."
+            )
+
+        def capture_omniparser_frame() -> bytes:
+            screenshot = pyautogui.screenshot().convert("RGB")
+            buffer = io.BytesIO()
+            screenshot.save(buffer, format="PNG")
+            return buffer.getvalue()
+
+        evidence_providers.append(
+            OmniParserEvidenceProvider(endpoint, capture_omniparser_frame, store)
+        )
+
     runtime = CoreOrchestrator(
         compositor,
         PyAutoGUIExecutor(
@@ -772,7 +790,7 @@ def mcp_autogui_main(mcp):
         proposal_provider=QwenCUAProposalProvider(qwen_backend, store),
         frame_provider=PyAutoGUIFrameProvider(pyautogui, store),
         application_launcher=launcher,
-        evidence_providers=(CompositorWindowEvidenceProvider(),),
+        evidence_providers=tuple(evidence_providers),
         policy_providers=(platform_policy,),
         store=store,
     )
@@ -1030,7 +1048,3 @@ def mcp_autogui_main(mcp):
             },
             "task_validation": task_validation,
         }
-
-
-    if _env_enabled("GUI_OMNIPARSER_ENABLED"):
-        register_omniparser_tools(mcp)

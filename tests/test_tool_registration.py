@@ -113,6 +113,18 @@ class ToolRegistrationTests(unittest.TestCase):
         self.assertEqual(result["status"], "success")
         self.assertEqual(calls, [("win",)])
 
+    def test_omniparser_enablement_registers_no_legacy_execution_tools(self):
+        mcp = self.compose()
+        with patch("mcp_autogui.mcp_autogui_main.QwenBackendClient", return_value=Backend()), patch.dict(
+            os.environ,
+            {"GUI_OMNIPARSER_ENABLED": "1", "OMNI_PARSER_SERVER": "parser.example:8000"},
+            clear=False,
+        ):
+            mcp_autogui_main(mcp)
+
+        self.assertNotIn("omniparser_click", mcp.functions)
+        self.assertEqual(len(mcp.tools), 5)
+
 
 if __name__ == "__main__":
     unittest.main()

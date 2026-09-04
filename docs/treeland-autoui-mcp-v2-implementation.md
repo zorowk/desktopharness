@@ -20,18 +20,17 @@ Core 不包含 Treeland、Deepin、Qwen、PyAutoGUI 或 `dde-am` 的 import 和�
 v2 事务内核和默认 Qwen + Treeland 路径已经实现；以下事项不应被表述为
 “v2 已完成”：
 
-1. **OmniParser 迁移**：当前仅保留默认关闭的旧 `omniparser_*` 直连执行路径，
-   它不属于 v2。若恢复使用，必须实现为只提供标准 EvidenceRecord 的
-   Evidence/Grounding Provider；它不能注册独立执行工具，也不能绕过 Proposal、
-   PolicyDecision、Guard、Receipt 与 Assertion 流程。
-2. **独立业务证据**：当前 compositor-window provider 只能验证窗口级事实。仍需接入
-   并验证 AT-SPI、OCR、DOM 或应用 API 等 provider，才能可靠判定控件状态、文本和
+1. **独立业务证据**：当前 compositor-window provider 只能验证窗口级事实。OmniParser
+   已迁移为默认关闭、只读的 `omniparser-grounding` provider：它只提供注册的
+   `control.*`/`document.text` 概率性 EvidenceRecord，并将原始响应保存在 artifact
+   引用中；不会注册 `omniparser_*` 直连执行工具。仍需接入并验证 AT-SPI、OCR、DOM
+   或应用 API 等具有适当独立性和可靠性的 provider，才能可靠判定控件状态、文本和
    业务结果。
-3. **跨合成器实证**：CanonicalJsonAdapter 已覆盖协议夹具；仍需至少一个非 Treeland
+2. **跨合成器实证**：CanonicalJsonAdapter 已覆盖协议夹具；仍需至少一个非 Treeland
    合成器的真实 adapter 与同等契约/桌面测试，才能证明通用性。
-4. **持久审计（按部署需要）**：当前 ObjectStore 是进程内存储。若任务轨迹需要跨进程
+3. **持久审计（按部署需要）**：当前 ObjectStore 是进程内存储。若任务轨迹需要跨进程
    重启保存、复核或统计，应替换为具有访问控制和保留策略的持久 artifact/object store。
-5. **集中真实 Treeland 回归验收**：在上述实现完成后，按
+4. **集中真实 Treeland 回归验收**：在上述实现完成后，按
    `manual-test-guide.md` 的基础事务、桌面适配器与 5×10 重复矩阵执行，产出可复核的
    成功率、拒绝率、延迟和 attribution 报告。当前单元测试不能替代此项。
 

@@ -9,5 +9,6 @@
 - [v2 实现与扩展指南](treeland-autoui-mcp-v2-implementation.md)：已实现范围、扩展方式和当前 MCP 工具面。
 - [v2 手工验收与回归计划](manual-test-guide.md)：真实桌面测试前提、测试矩阵、记录格式和通过标准。
 
-OmniParser 是默认关闭的历史对照能力，不属于 v2 生产执行路径。在它被改造成
-v2 Evidence/Grounding Provider 前，不得用其旧执行工具做当前功能验收。
+OmniParser 默认关闭；启用后仅作为 v2 的 Evidence/Grounding Provider。它不注册
+旧的直连执行工具，且其概率性证据不能绕过 v2 的 Proposal、PolicyDecision、Guard、
+Receipt 与 Assertion 流程。

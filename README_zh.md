@@ -67,8 +67,9 @@ export CUA_MODEL_TLS_VERIFY=1                 # 仅自签名测试端点才显�
 
 内嵌服务先保存待处理动作提案，只有收到本地实际执行结果后才更新正式 Qwen 历史。成功、部分执行、拒绝和失败都会显式反馈给同一 session，避免模型历史与真实桌面状态分叉。旧 HTTP 兼容后端不支持反馈时，仍会自动重置不一致 session。
 
-OmniParser 是默认关闭的历史对照能力，不属于 v2 生产执行路径。它在改造成
-v2 Evidence/Grounding Provider 前，不应启用其旧执行接口：
+OmniParser 默认关闭；启用后仅作为 v2 的只读 Evidence/Grounding Provider，
+不会注册旧的直连执行接口。它产生概率性控件/文档证据，不能绕过 Proposal、
+PolicyDecision、Guard、Receipt 或 Assertion 流程：
 
 ```bash
 export GUI_OMNIPARSER_ENABLED=1
