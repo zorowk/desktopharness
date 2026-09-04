@@ -2,11 +2,22 @@
 
 本文记录 `treeland-autoui-mcp-v2-design.md` 对应的已实现基线。
 
+## MCP 服务配置
+
+统一的服务端配置位于 [`config/mcp-autoui.json`](../config/mcp-autoui.json)，可复制模板见
+[`config/mcp-autoui.example.json`](../config/mcp-autoui.example.json)。启动命令为
+`uv run treeland-autogui-mcp --config config/mcp-autoui.json`；配置覆盖 transport、
+Qwen-CUA proposal provider、Evidence Provider、审计策略和 `desktop_backend.kind`。
+JSON 是推荐入口，`CUA_*`、`GUI_*` 和 transport 环境变量仅保留给旧部署兼容。加载器目前
+在组件构造前将 JSON 规范化为旧组件读取的运行设置；组件构造函数的 typed-config 迁移仍是
+后续清理工作。敏感凭据（如模型 API key）仍应由受控 secret mechanism 提供，不应提交到
+JSON 文件。
+
 ## 已实现边界
 
 - `core/` 包含 canonical 协议对象、Action Gate、ProposalGuard、语义策略、Assertion Evaluator、确定性 Task State Reducer、append-only Ledger、Context Builder 和薄 Orchestrator；可选审计模式使用私有 JSON 对象目录、原始二进制 artifact 目录和 `ledger.csv` 持久化协议对象与事件。
 - `ports/` 定义 compositor、frame、proposal、policy、executor、application launcher、platform capability 和 evidence 契约。
-- `adapters/` 包含 Treeland 与严格 canonical-JSON compositor adapter、Qwen-CUA proposal adapter、PyAutoGUI frame/input adapter、Deepin capability adapter、`dde-am` launcher 和 compositor-window evidence provider。
+- `adapters/` 包含 Treeland 与严格 canonical-JSON compositor adapter、Qwen-CUA proposal adapter、PyAutoGUI frame/input adapter、Treeland/Deepin desktop capability adapter 和 compositor-window evidence provider。Treeland/Deepin desktop adapter 可选提供基于 `dde-am` 的应用启动能力。
 - `facade.py` 实现紧凑的 `gui_run` 操作和诊断对象查询。
 - `gui_run(operation="run")` 执行有界的自动闭环；每轮仍是一个独立的
   `observe -> propose -> decide -> execute -> evaluate` 事务，遇到确认、拒绝、
@@ -29,7 +40,9 @@ v2 事务内核和默认 Qwen + Treeland 路径已经实现；以下事项不应
    或应用 API 等具有适当独立性和可靠性的 provider，才能可靠判定控件状态、文本和
    业务结果。
 2. **跨合成器实证**：CanonicalJsonAdapter 已覆盖协议夹具；仍需至少一个非 Treeland
-   合成器的真实 adapter 与同等契约/桌面测试，才能证明通用性。
+   合成器的真实 adapter 与同等契约/桌面测试，才能证明通用性。应用装配通过显式
+   backend registry 创建后端，JSON 的 `desktop_backend.kind` 只能选择已注册项；新增后端
+   必须注册其 factory，不能让 Core 根据平台名分支。
 3. **持久审计的真实环境验收**：设置 `GUI_AUDIT_DIR` 后，运行时将小型、结构化协议对象
    以及截图、原始树和模型输出等 artifact 写入私有 JSON 文件，并把 Ledger 追加到
    `ledger.csv`；二进制 artifact 以原始 `.bin` 文件保存于独立 `artifacts/` 目录，JSON
@@ -86,6 +99,22 @@ observe -> propose -> decide -> guard recheck -> execute
 在 `adapters/compositor/` 中实现 `ports.compositor.CompositorAdapter`，并返回 `CanonicalSnapshot`。只映射 `CanonicalWindowFact` 定义的字段；其余原生字段丢弃，或将完整原始 payload 保存到 `raw_artifact_ref`。Adapter 必须声明真实 stacking model；无法提供 hit test、identity、visibility 或 cursor 时不能伪装为否定事实。
 
 已经输出 canonical JSON 的 compositor bridge 可以直接使用 `CanonicalJsonAdapter`。它会有意忽略未知输入字段。
+
+## 新增桌面后端能力
+
+一个桌面后端是合成器观察能力及其同一桌面会话的可选能力的组合，而不是让 Core 认识
+某个桌面系统。以当前 Treeland/Deepin 后端为例，`TreelandAdapter` 除了实现
+`CompositorAdapter`，还暴露可选的 `application_launcher`；其实现使用 `dde-am`，但
+`dde-am` 并不是 Core API，也不应被当作所有合成器共有的命令。
+
+在另一平台继续开发时：
+
+1. 实现该平台的 `CompositorAdapter`，并通过 Canonical Model 暴露可证明的窗口、坐标和 stacking 能力。
+2. 若桌面会话有安全、稳定的应用启动 API，在该后端提供 `ApplicationLauncher`；没有就传入 `None`，由事务返回 `CAPABILITY_UNAVAILABLE`，不要降级为任意 shell 命令。
+3. 若有经过审查的平台操作，在该后端提供 `PlatformCapabilityProvider`；其能力 ID 和策略语义不得依赖任意 D-Bus 参数或快捷键串。
+4. 在 `desktop_backend.py` 的 backend registry 注册 factory，并将后端提供的 ports 交给 Orchestrator。把新的 ID 写入 JSON 的 `desktop_backend.kind`；未知 ID 会在 MCP 启动前被拒绝。
+
+无论上述可选能力是否存在，所有启动和平台动作仍必须生成 Proposal，并经过 Policy、Guard、Receipt 与 Assertion 事务。
 
 ## 新增 Evidence 或执行后端
 

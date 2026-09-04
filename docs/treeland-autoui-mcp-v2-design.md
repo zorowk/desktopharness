@@ -217,7 +217,7 @@ Treeland 的实现是：`TreelandAdapter → CanonicalSnapshot`，其 transport 
 
 ### 2.3 平台能力目录：主控知道系统规则，Qwen 处理视觉剩余部分
 
-“打开应用”不能完全依赖 Qwen 从截图猜桌面图标或记忆快捷键。Deepin 已提供可读取的默认快捷键 schema，以及 `dde-am` 的按应用 ID 启动接口；它们应由 MCP 作为平台能力提供给主控，而不是以原始 shell 命令的形式交给模型。
+“打开应用”不能完全依赖 Qwen 从截图猜桌面图标或记忆快捷键。Treeland/Deepin 桌面后端可提供 Deepin 默认快捷键 schema，以及 `dde-am` 的按应用 ID 启动接口；它们应由该后端作为桌面能力提供给主控，而不是以原始 shell 命令的形式交给模型。
 
 当前实现提供以下迁移期工具：
 
@@ -246,7 +246,7 @@ Treeland 的实现是：`TreelandAdapter → CanonicalSnapshot`，其 transport 
 
 这不会把 Qwen 排除在流程外：Qwen 仍处理没有系统 API 的视觉界面；只是“系统如何打开 Launcher”与“哪个桌面图标是编辑器”不再由它猜测。
 
-这些工具是迁移期 adapter facade，不是核心 API：Deepin 快捷键实现 `PlatformCapabilityProvider`，`dde-am` 实现 `ApplicationLauncher`。它们执行前必须生成 `platform.invoke` 或 `application.launch` Proposal，不能旁路单动作事务。
+这些工具是迁移期 adapter facade，不是核心 API：Treeland/Deepin desktop adapter 提供 Deepin 快捷键的 `PlatformCapabilityProvider` 与 `dde-am` 的 `ApplicationLauncher`。它们执行前必须生成 `platform.invoke` 或 `application.launch` Proposal，不能旁路单动作事务。
 
 `/usr/share/dsg/configs/org.deepin.dde.keybinding` 是默认 schema，不是用户运行时设置的证明。目录结果必须标为 `source=default-schema`；接入 DConfig 或 D-Bus 有效配置查询后，才可以标为 `runtime-verified`。目录中即使 `enabled=true`，也不代表可自动执行：锁屏、注销、关机、关闭窗口等仍由 `controller-policy` 拒绝或要求用户确认。
 
@@ -1609,7 +1609,7 @@ propose → execute → verify
 
 - Qwen-CUA 实现 `ProposalProvider`；
 - PyAutoGUI 实现 `InputExecutor`；
-- `dde-am` 实现 `ApplicationLauncher`；
+- Treeland/Deepin desktop adapter 提供基于 `dde-am` 的 `ApplicationLauncher`；
 - Deepin 快捷键目录实现 `PlatformCapabilityProvider`；
 - 平台快捷键和应用启动也生成 Proposal，不得旁路事务；
 - 核心代码不得 import 具体 adapter。

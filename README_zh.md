@@ -9,8 +9,8 @@
 ## AutoUI v2 通用事务内核
 
 服务现在默认注册跨合成器的 `gui_run` facade。核心只依赖 Canonical Model
-和可替换 port；Treeland、Qwen-CUA、PyAutoGUI、Deepin 快捷键和 `dde-am`
-都位于 adapter 或应用装配层，不进入核心。
+和可替换 port；Treeland、Qwen-CUA、PyAutoGUI 都位于 adapter 层，不进入核心。
+Treeland/Deepin 桌面后端还可选提供 Deepin 快捷键和基于 `dde-am` 的应用启动能力。
 
 v2 显式调用流程为：
 
@@ -81,14 +81,25 @@ export OMNI_PARSER_SERVER=host:port
 
 ## Codex 连接
 
-`client_env.sh` 默认以 Streamable HTTP 启动服务。使用以下命令配置 Codex：
+服务端配置见 [`config/mcp-autoui.json`](config/mcp-autoui.json)，字段说明和可复制模板见
+[`config/mcp-autoui.example.json`](config/mcp-autoui.example.json)。通过 JSON 的
+`desktop_backend.kind` 选择桌面后端；当前唯一可选值是 `treeland-deepin`。启动时传入：
 
 ```bash
-codex mcp add treeland_autogui_mcp --url http://127.0.0.1:8000/mcp
+uv run treeland-autogui-mcp --config config/mcp-autoui.json
 ```
 
-只有旧 SSE 客户端才需设置 `MCP_TRANSPORT=sse`，对应地址仍为
-`http://127.0.0.1:8000/sse`。
+JSON 是推荐入口；`CUA_*`、`GUI_*` 和 transport 环境变量只保留给旧部署兼容。API key 等
+敏感值不应提交到该文件，应由受控 secret mechanism 注入。
+
+使用默认 JSON 配置启动后，Codex 连接地址为：
+
+```bash
+codex mcp add treeland_autogui_mcp --url http://127.0.0.1:8651/mcp
+```
+
+`client_env.sh` 和 `MCP_TRANSPORT` 仅用于旧环境变量部署；SSE 旧客户端地址取决于 JSON
+的 `transport.host` 与 `transport.port`，默认是 `http://127.0.0.1:8651/sse`。
 
 ## 安装
 
