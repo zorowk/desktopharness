@@ -25,12 +25,20 @@ _ACTION_TYPES = {
     "rightClick": ActionType.POINTER_CLICK,
     "middleClick": ActionType.POINTER_CLICK,
     "doubleClick": ActionType.POINTER_DOUBLE_CLICK,
+    "tripleClick": ActionType.POINTER_CLICK,
     "dragTo": ActionType.POINTER_DRAG,
+    "moveRel": ActionType.POINTER_MOVE,
+    "dragRel": ActionType.POINTER_DRAG,
     "scroll": ActionType.POINTER_SCROLL,
+    "hscroll": ActionType.POINTER_SCROLL,
     "press": ActionType.KEYBOARD_KEY,
+    "keyDown": ActionType.KEYBOARD_KEY,
+    "keyUp": ActionType.KEYBOARD_KEY,
     "hotkey": ActionType.KEYBOARD_SHORTCUT,
     "typewrite": ActionType.KEYBOARD_TEXT,
     "write": ActionType.KEYBOARD_TEXT,
+    "mouseDown": ActionType.POINTER_CLICK,
+    "mouseUp": ActionType.POINTER_CLICK,
     "done": ActionType.DONE,
 }
 
@@ -59,7 +67,8 @@ class QwenCUAProposalProvider:
         if len(parsed) != 1:
             raise ValueError("Qwen-CUA v2 must return exactly one action")
         debug_ref = self._store.put(result, prefix="model-output")
-        action = self._canonical_action(parsed[0], context)
+        snapshot: CanonicalSnapshot = self._store.require(context.based_on_snapshot)
+        action = canonical_action_from_parsed(parsed[0], snapshot, context.frame.pixel_size)
         return ActionProposal(
             proposal_id=new_id("proposal"),
             source="qwen-cua",
@@ -108,49 +117,94 @@ class QwenCUAProposalProvider:
             "recent_execution_receipt": context.recent_execution_receipt,
             "assertion_feedback": context.assertion_feedback,
             "constraints": context.constraints,
+            "recent_frame_refs": context.recent_frame_refs,
+            "primary_attribution": context.primary_attribution,
+            "projection_limits": context.projection_limits,
         }
         return "Use the screenshot and this controller context. Return one action only.\n" + json.dumps(
             to_primitive(projection), ensure_ascii=False
         )
 
-    def _canonical_action(self, parsed: dict[str, Any], context: ModelContext) -> Action:
-        source_type = str(parsed.get("type"))
-        action_type = _ACTION_TYPES.get(source_type)
-        if action_type is None:
-            raise ValueError(f"unsupported Qwen action in v2: {source_type}")
-        coordinate = parsed.get("coordinate")
-        desktop_point = None
-        if coordinate is not None:
-            snapshot: CanonicalSnapshot = self._store.require(context.based_on_snapshot)
-            width, height = context.frame.pixel_size
-            bounds = snapshot.coordinate_space.bounds
-            desktop_point = Point(
-                bounds.x + float(coordinate["x"]) * bounds.width / width,
-                bounds.y + float(coordinate["y"]) * bounds.height / height,
-            )
-        args = parsed.get("args", [])
-        kwargs = dict(parsed.get("kwargs", {}))
-        parameters: dict[str, Any] = {}
-        if action_type in {ActionType.POINTER_CLICK, ActionType.POINTER_DOUBLE_CLICK, ActionType.POINTER_DRAG}:
-            parameters = {key: kwargs[key] for key in ("button", "duration") if key in kwargs}
-            if source_type == "rightClick":
-                parameters.setdefault("button", "right")
-            elif source_type == "middleClick":
-                parameters.setdefault("button", "middle")
-        elif action_type == ActionType.POINTER_SCROLL:
-            parameters = {"clicks": kwargs.get("clicks", args[0] if args else 0)}
-        elif action_type == ActionType.KEYBOARD_KEY:
-            parameters = {"key": kwargs.get("key", args[0] if args else None)}
-        elif action_type == ActionType.KEYBOARD_SHORTCUT:
-            parameters = {"keys": list(args)}
-        elif action_type == ActionType.KEYBOARD_TEXT:
-            parameters = {
-                "text": kwargs.get("message", kwargs.get("text", args[0] if args else "")),
-                "interval": kwargs.get("interval", 0),
-            }
-        return Action(
-            type=action_type,
-            coordinate=desktop_point,
-            coordinate_space="desktop-logical" if desktop_point is not None else None,
-            parameters=parameters,
+
+
+def canonical_action_from_parsed(
+    parsed: dict[str, Any],
+    snapshot: CanonicalSnapshot,
+    pixel_size: tuple[int, int],
+) -> Action:
+    """Translate one allowlisted legacy Qwen call into the finite v2 action schema."""
+    source_type = str(parsed.get("type"))
+    action_type = _ACTION_TYPES.get(source_type)
+    if action_type is None:
+        raise ValueError(f"unsupported Qwen action in v2: {source_type}")
+    args = list(parsed.get("args", []))
+    kwargs = dict(parsed.get("kwargs", {}))
+    coordinate = parsed.get("coordinate")
+    relative = source_type in {"moveRel", "dragRel"}
+    if relative:
+        if snapshot.cursor is None:
+            raise ValueError("relative Qwen action requires a current cursor position")
+        dx = kwargs.get("xOffset", kwargs.get("x", args[0] if args else None))
+        dy = kwargs.get("yOffset", kwargs.get("y", args[1] if len(args) > 1 else None))
+        if not isinstance(dx, (int, float)) or not isinstance(dy, (int, float)):
+            raise ValueError("relative Qwen action requires numeric x/y offsets")
+        desktop_point = Point(snapshot.cursor.x + float(dx), snapshot.cursor.y + float(dy))
+    elif coordinate is not None:
+        width, height = pixel_size
+        if width <= 0 or height <= 0:
+            raise ValueError("frame pixel size must be positive")
+        bounds = snapshot.coordinate_space.bounds
+        desktop_point = Point(
+            bounds.x + float(coordinate["x"]) * bounds.width / width,
+            bounds.y + float(coordinate["y"]) * bounds.height / height,
         )
+    elif action_type == ActionType.POINTER_CLICK:
+        if snapshot.cursor is None:
+            raise ValueError("pointer action requires a current cursor position")
+        desktop_point = snapshot.cursor
+    else:
+        desktop_point = None
+
+    parameters: dict[str, Any] = {}
+    if action_type in {ActionType.POINTER_CLICK, ActionType.POINTER_DOUBLE_CLICK, ActionType.POINTER_DRAG}:
+        parameters = {key: kwargs[key] for key in ("button", "duration") if key in kwargs}
+        if source_type == "rightClick":
+            parameters.setdefault("button", "right")
+        elif source_type == "middleClick":
+            parameters.setdefault("button", "middle")
+        elif source_type == "tripleClick":
+            parameters["clicks"] = 3
+        elif source_type in {"mouseDown", "mouseUp"}:
+            parameters["event"] = "down" if source_type == "mouseDown" else "up"
+        if relative:
+            parameters["relative"] = True
+    elif action_type == ActionType.POINTER_MOVE:
+        parameters = {key: kwargs[key] for key in ("duration",) if key in kwargs}
+        if relative:
+            parameters["relative"] = True
+    elif action_type == ActionType.POINTER_SCROLL:
+        parameters = {
+            "clicks": kwargs.get("clicks", args[0] if args else 0),
+            "axis": "horizontal" if source_type == "hscroll" else "vertical",
+        }
+    elif action_type == ActionType.KEYBOARD_KEY:
+        parameters = {
+            "key": kwargs.get("key", args[0] if args else None),
+            "presses": kwargs.get("presses", 1),
+            "interval": kwargs.get("interval", 0),
+        }
+        if source_type in {"keyDown", "keyUp"}:
+            parameters["event"] = "down" if source_type == "keyDown" else "up"
+    elif action_type == ActionType.KEYBOARD_SHORTCUT:
+        parameters = {"keys": list(args)}
+    elif action_type == ActionType.KEYBOARD_TEXT:
+        parameters = {
+            "text": kwargs.get("message", kwargs.get("text", args[0] if args else "")),
+            "interval": kwargs.get("interval", 0),
+        }
+    return Action(
+        type=action_type,
+        coordinate=desktop_point,
+        coordinate_space=snapshot.coordinate_space.id if desktop_point is not None else None,
+        parameters=parameters,
+    )

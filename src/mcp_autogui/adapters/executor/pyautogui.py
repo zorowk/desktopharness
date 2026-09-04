@@ -25,10 +25,12 @@ class PyAutoGUIExecutor:
         *,
         coordinate_mapper: Callable[[Point, str, ActionProposal], Point] | None = None,
         platform_resolver: Callable[[str], dict | None] | None = None,
+        drag_handler: Callable[[ActionProposal, Point], bool] | None = None,
     ) -> None:
         self._module = module
         self._coordinate_mapper = coordinate_mapper or (lambda point, _space, _proposal: point)
         self._platform_resolver = platform_resolver
+        self._drag_handler = drag_handler
 
     def execute(self, proposal: ActionProposal) -> ExecutionReceipt:
         started = utc_now()
@@ -57,18 +59,46 @@ class PyAutoGUIExecutor:
             else None
         )
         params = dict(action.parameters)
+        if action.coordinate is not None and point is None:
+            raise ValueError("coordinate mapping did not return a point")
         if action.type == ActionType.POINTER_MOVE:
             self._module.moveTo(point.x, point.y, duration=params.get("duration", 0))
         elif action.type == ActionType.POINTER_CLICK:
-            self._module.click(point.x, point.y, button=params.get("button", "left"))
+            event = params.get("event")
+            if event == "down":
+                self._module.moveTo(point.x, point.y)
+                self._module.mouseDown(button=params.get("button", "left"))
+            elif event == "up":
+                self._module.moveTo(point.x, point.y)
+                self._module.mouseUp(button=params.get("button", "left"))
+            else:
+                self._module.click(
+                    point.x,
+                    point.y,
+                    button=params.get("button", "left"),
+                    clicks=params.get("clicks", 1),
+                    interval=params.get("interval", 0),
+                )
         elif action.type == ActionType.POINTER_DOUBLE_CLICK:
             self._module.doubleClick(point.x, point.y, button=params.get("button", "left"))
         elif action.type == ActionType.POINTER_DRAG:
-            self._module.dragTo(point.x, point.y, duration=params.get("duration", 0.5), button=params.get("button", "left"))
+            handled = self._drag_handler(proposal, point) if self._drag_handler else False
+            if not handled:
+                self._module.dragTo(point.x, point.y, duration=params.get("duration", 0.5), button=params.get("button", "left"))
         elif action.type == ActionType.POINTER_SCROLL:
-            self._module.scroll(params.get("clicks", 0))
+            function = self._module.hscroll if params.get("axis") == "horizontal" else self._module.scroll
+            function(params.get("clicks", 0))
         elif action.type == ActionType.KEYBOARD_KEY:
-            self._module.press(params["key"])
+            if params.get("event") == "down":
+                self._module.keyDown(params["key"])
+            elif params.get("event") == "up":
+                self._module.keyUp(params["key"])
+            else:
+                self._module.press(
+                    params["key"],
+                    presses=params.get("presses", 1),
+                    interval=params.get("interval", 0),
+                )
         elif action.type == ActionType.KEYBOARD_SHORTCUT:
             self._module.hotkey(*params["keys"])
         elif action.type == ActionType.KEYBOARD_TEXT:

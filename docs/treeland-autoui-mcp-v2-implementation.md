@@ -8,6 +8,10 @@
 - `ports/` 定义 compositor、frame、proposal、policy、executor、application launcher、platform capability 和 evidence 契约。
 - `adapters/` 包含 Treeland 与严格 canonical-JSON compositor adapter、Qwen-CUA proposal adapter、PyAutoGUI frame/input adapter、Deepin capability adapter、`dde-am` launcher 和 compositor-window evidence provider。
 - `facade.py` 实现紧凑的 `gui_run` 操作和诊断对象查询。
+- `gui_run(operation="run")` 执行有界的自动闭环；每轮仍是一个独立的
+  `observe -> propose -> decide -> execute -> evaluate` 事务，遇到确认、拒绝、
+  重复无进展或任务终态即停止并返回恢复建议；证据不足时切换到
+  `verification-focused` 投影，仍受任务步数预算限制。
 
 Core 不包含 Treeland、Deepin、Qwen、PyAutoGUI 或 `dde-am` 的 import 和专用分支。合成器原始树与截图保存在对象存储中；正常协议对象只携带引用。
 
@@ -25,6 +29,11 @@ observe -> propose -> decide -> guard recheck -> execute
 - `ExecutionReceipt.delivered`、Evidence、AssertionResult 和 TaskState 是不同对象。只有 Reducer 能产生 `completed`。
 - Evidence Provider 只能输出注册过的 fact path。缺失、过期、仅模型声明或冲突的 evidence 不能使断言通过。
 - Ledger Event 只保存对象/artifact 引用和因果 event ID，不嵌入原始树、截图或完整模型输出。
+- Context Builder 的 `compact`、`visual-heavy`、`recovery`、`verification-focused`
+  和 `planning-reset` 是不同预算与事件投影，不是同一 history 的别名。恢复投影
+  会附带最近 primary attribution；模型历史不会被当作 verified fact。
+- 对外信封返回 attribution 引用和稳定恢复动作；环境变化、安全拒绝和证据不足
+  与组件执行错误分开记录。
 
 ## 新增合成器
 
@@ -38,6 +47,13 @@ Evidence Provider 声明 `core.facts.STANDARD_FACT_PATHS` 的子集，并只返�
 
 Input/Application backend 只返回 `ExecutionReceipt`。窗口变化或业务结果不能写入回执，必须由独立 Evidence Provider 采集。
 
-## 迁移兼容
+## 工具面
 
-现有 `qwen_cua_predict`、`qwen_cua_execute`、`qwen_cua_reset` 和 `qwen_cua_status` 接口继续保留原响应形状。`desktop_shortcut_invoke` 与 `desktop_application_launch` 已在内部创建并执行 v2 Proposal，同时保留旧返回字段。新的 `gui_run` Qwen 路径强制每个 Proposal 只有一个 canonical action。
+旧 `qwen_cua_predict`、`qwen_cua_execute`、`qwen_cua_reset`、`qwen_cua_status`
+兼容工具已删除。唯一对外工具是 `gui_run`（全部协议操作）以及
+`desktop_*` 工具；`desktop_shortcut_invoke` 与 `desktop_application_launch`
+内部同样走 canonical Proposal -> PolicyDecision -> Guard -> ExecutionReceipt。
+Qwen 后端只实现 `ProposalProvider`：每轮必须产出一个 canonical action，原始模型
+输出仅以 `debug_ref` 保存。需要自动执行时由 `gui_run(operation="run")` 驱动；需要
+人工审批或诊断时使用 `observe`、`propose`、`decide`、`execute`、`evaluate`、`trace`
+等显式操作。

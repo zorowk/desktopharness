@@ -123,12 +123,39 @@ class AttributionEvidenceStatus(StrEnum):
     INSUFFICIENT = "insufficient"
 
 
+class AttributionStage(StrEnum):
+    PERCEPTION = "perception"
+    PLANNING = "planning"
+    GROUNDING = "grounding"
+    PROTOCOL = "protocol"
+    GUARD_EVALUATION = "guard-evaluation"
+    EXECUTION = "execution"
+    ENVIRONMENT = "environment"
+    OUTCOME = "outcome"
+    EVIDENCE_COLLECTION = "evidence-collection"
+    ASSERTION_EVALUATION = "assertion-evaluation"
+    STATE_TRANSITION = "state-transition"
+    POLICY = "policy"
+
+
+class AttributionOwner(StrEnum):
+    QWEN = "qwen"
+    ACTION_GATE = "action-gate"
+    EXECUTOR = "executor"
+    ENVIRONMENT = "environment"
+    EVIDENCE_PROVIDER = "evidence-provider"
+    ASSERTION_EVALUATOR = "assertion-evaluator"
+    TASK_STATE_REDUCER = "task-state-reducer"
+    CONTROLLER_POLICY = "controller-policy"
+    UNKNOWN = "unknown"
+
+
 @dataclass(frozen=True, slots=True)
 class Attribution:
     attribution_id: str
     event_kind: AttributionEventKind
-    stage: str
-    owner: str
+    stage: AttributionStage
+    owner: AttributionOwner
     code: str
     evidence_status: AttributionEvidenceStatus
     primary: bool
@@ -463,6 +490,9 @@ class ModelContext:
     ledger_event_refs: tuple[str, ...]
     spatial_projection: Mapping[str, Any] = field(default_factory=dict)
     strategy: str = "compact"
+    recent_frame_refs: tuple[str, ...] = ()
+    primary_attribution: Mapping[str, Any] | None = None
+    projection_limits: Mapping[str, int] = field(default_factory=dict)
     schema_version: str = SCHEMA_VERSION
 
 

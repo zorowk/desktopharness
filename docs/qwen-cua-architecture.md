@@ -1,4 +1,9 @@
-# Qwen-CUA 与 Treeland 协同架构设计
+# Qwen-CUA 与 Treeland 协同架构设计（v1 历史记录）
+
+> 当前对外接口已改为 `gui_run`；`qwen_cua_predict`、`qwen_cua_execute`、
+> `qwen_cua_reset` 和 `qwen_cua_status` 均已删除。本文件保留旧两阶段接口的
+> 背景、验收记录和后端设计，不可作为当前 MCP 调用手册。当前实现以
+> `treeland-autoui-mcp-v2-implementation.md` 与 v2 设计为准。
 
 状态：客户端、融合链路、内嵌后端和真实模型合成图联调已完成，等待 Treeland 桌面联调
 目标：提高 AI 操作桌面的准确度、精确度和可验证性

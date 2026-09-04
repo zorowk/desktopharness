@@ -51,32 +51,30 @@ For comparison with the old deployment, set `CUA_BACKEND_MODE=http` and use
 `CUA_BACKEND_URL`, `CUA_BACKEND_API_KEY`, and `CUA_TLS_VERIFY`. HTTP mode is an
 optional compatibility path, not the default dependency.
 
-The Qwen tools use an explicit two-stage flow:
+All Qwen interaction goes through the unified `gui_run` tool; the legacy
+`qwen_cua_*` tools were removed. The embedded backend is addressed by the
+task contract, and each round produces exactly one canonical action:
 
-1. Call `qwen_cua_predict(instruction)` to receive a `session_id`, proposed Qwen actions, and deterministic Treeland window context. Prediction does not execute actions.
-2. Inspect `fused_actions`, then call `qwen_cua_execute(session_id, action_indexes)` to execute all or selected allowlisted actions.
-3. Call `qwen_cua_predict` again with the same session for the next step. Use a new session or call `qwen_cua_reset` for a new task.
+1. `gui_run(operation="run", task_contract={"task_id": ..., "goal": ...,
+   "permissions": {...}, "limits": {"max_steps": 5, "max_retries": 2},
+   "policy_overrides": {"unknown": "allow", "content_edit": "allow"}})`
+   executes bounded single-action transactions:
+   observe -> propose (Qwen) -> decide -> guard recheck -> execute ->
+   evaluate -> reduce state, until the task blocks or terminates.
+2. Fine-grained control uses the explicit operations instead: `observe`,
+   `propose`, `decide`, `execute`, `evaluate` (or `verify`), `status`,
+   `reset`, and `trace`. Responses return object references; pass
+   `diagnostic=true` or use `trace` to expand a stored object such as the
+   model output (`debug_ref`), the execution receipt, or the assertion
+   results.
+3. `gui_run(operation="reset", task_id=...)` resets the runtime task and the
+   embedded Qwen session for a new task.
 
-These `qwen_cua_*` tools remain migration-compatible. New integrations should
-use `gui_run`; its Qwen adapter rejects multi-action proposals.
-
-For tasks with a window-level completion condition, such as opening an
-application, pass `expected_active_app_id="deepin-editor"` on the first
-prediction. After execution, the MCP polls the Treeland tree for
-`application_wait_timeout_s` (three seconds by default), then captures one
-final screenshot and tree. It returns
-`task_completed: true` when the expected app becomes active; a wrong app or a
-timeout returns `status: "partial"` with structured `task_validation` while
-keeping the session available for correction. A Qwen `DONE` action cannot
-bypass this assertion. Later predictions in the same session inherit the
-expected appId when the argument is omitted.
-
-For a controller-led coordinate calibration while still using Qwen, pass
-`expected_action="mouse_move"` and
-`expected_screenshot_coordinate=[x, y]` to `qwen_cua_predict`. The control
-layer converts the screenshot target to Qwen's native 0..999 coordinate space,
-requires that single Qwen proposal, and rejects a result outside the configured
-pixel tolerance. Ordinary visual tasks should omit these optional constraints.
+Window-level completion conditions are declared as task-contract assertions,
+for example `assertions: [{"assertion_id": "application-active", "path":
+"active_window.app_id", "operator": "equals", "expected": "deepin-editor"}]`.
+The evaluator collects evidence after each action; a Qwen `DONE` action cannot
+mark the task complete while an assertion is unverified.
 
 The embedded service keeps each prediction pending and commits it to Qwen
 history only after receiving the actual local execution result. Success,

@@ -1,4 +1,8 @@
-# Qwen-CUA + Treeland 手工测试指南
+# Qwen-CUA + Treeland 手工测试指南（v1 历史记录）
+
+> 本文描述的 `qwen_cua_*` 工具已删除，不能用于当前版本验收。当前测试应使用
+> `gui_run(operation="run", ...)` 或其显式的 observe/propose/decide/execute/evaluate
+> 操作，并以 `treeland-autoui-mcp-v2-implementation.md` 为准。
 
 本指南用于评估当前框架的四层能力：
 

@@ -74,6 +74,7 @@ class GuiRunFacade:
         strategy: str = "compact",
         object_ref: str = "",
         diagnostic: bool = False,
+        max_iterations: int | None = None,
     ) -> dict[str, Any]:
         operation = operation.strip().lower()
         operation = {"assess": "decide", "verify": "evaluate"}.get(operation, operation)
@@ -105,7 +106,8 @@ class GuiRunFacade:
                     ),
                 },
                 "actions": [item.value for item in ActionType],
-                "operations": ["describe", "observe", "propose", "decide", "execute", "evaluate", "status", "reset", "trace"],
+                "operations": ["describe", "observe", "propose", "decide", "execute", "evaluate", "run", "status", "reset", "trace"],
+                "context_strategies": sorted(self.runtime.context_builder.STRATEGIES),
                 "policy_profiles": sorted(self.runtime.gate.policy_profiles),
             }
             ref = self.runtime.store.put(description, prefix="description")
@@ -140,7 +142,7 @@ class GuiRunFacade:
 
         if operation == "observe":
             value = self.runtime.observe(resolved_task)
-            return self._response(operation, "ok", value.snapshot_id, diagnostic)
+            return self._response(operation, "ok", value.snapshot_id, diagnostic, resolved_task)
         if operation == "propose":
             if proposal is None:
                 value = self.runtime.propose(resolved_task, strategy=strategy)
@@ -149,7 +151,7 @@ class GuiRunFacade:
                 value = self.runtime.submit_proposal(
                     resolved_task, parse_action_proposal(proposal, current.snapshot_id)
                 )
-            return self._response(operation, "needs-execution", value.proposal_id, diagnostic)
+            return self._response(operation, "needs-execution", value.proposal_id, diagnostic, resolved_task)
         if operation == "decide":
             value = self.runtime.decide(proposal_id.strip())
             ref = self._last_object_ref(resolved_task, "decision.created")
@@ -160,21 +162,22 @@ class GuiRunFacade:
                 PolicyStatus.INVALID: "refused",
                 PolicyStatus.STALE: "refused",
             }[value.status]
-            return self._response(operation, status, ref, diagnostic)
+            return self._response(operation, status, ref, diagnostic, resolved_task)
         if operation == "execute":
             value = self.runtime.execute(proposal_id.strip(), confirmed=confirmed)
             if value.error_code == "CONFIRMATION_REQUIRED":
                 status = "needs-confirmation"
             else:
                 status = "needs-evidence" if value.status.value == "delivered" else "refused" if value.status.value == "rejected" else "failed"
-            response = self._response(operation, status, value.execution_id, diagnostic)
+            response = self._response(operation, status, value.execution_id, diagnostic, resolved_task)
             if value.error_code and value.error_code != "CONFIRMATION_REQUIRED":
+                recovery = _recovery_for(value.error_code)
                 response["error"] = {
                     "code": value.error_code,
                     "message": "The proposed action was not delivered",
-                    "retry": value.error_code not in {"MECHANICAL_PERMISSION_DENIED", "SEMANTIC_POLICY_DENIED"},
-                    "required_action": "capture-new-frame" if value.error_code.endswith("CHANGED") else "review-policy",
+                    **recovery,
                 }
+                response["retry"] = recovery
             return response
         if operation == "evaluate":
             _, _, state = self.runtime.evaluate(resolved_task)
@@ -186,25 +189,62 @@ class GuiRunFacade:
                 TaskStatus.RETRY: "partial",
                 TaskStatus.CONTINUE: "ok",
             }[state.status]
-            return self._response(operation, status, ref, diagnostic)
+            return self._response(operation, status, ref, diagnostic, resolved_task)
+        if operation == "run":
+            value = self.runtime.run(
+                resolved_task,
+                confirmed=confirmed,
+                strategy=strategy,
+                max_iterations=max_iterations,
+            )
+            ref = self.runtime.store.put(value, prefix="run-result")
+            response = self._response(operation, value["status"], ref, diagnostic, resolved_task)
+            if value.get("retry"):
+                response["retry"] = value["retry"]
+            return response
         if operation == "status":
             state = self.runtime.status(resolved_task)
             ref = self.runtime.store.put(state, prefix="task-state")
-            return self._response(operation, state.status.value, ref, diagnostic)
+            status = {
+                TaskStatus.CONTINUE: "ok",
+                TaskStatus.RETRY: "partial",
+                TaskStatus.NEEDS_EVIDENCE: "needs-evidence",
+                TaskStatus.COMPLETED: "completed",
+                TaskStatus.FAILED: "failed",
+            }[state.status]
+            return self._response(operation, status, ref, diagnostic, resolved_task)
         if operation == "trace":
             return {
                 "protocol_version": 2,
                 "operation": "trace",
                 "status": "ok",
                 "events": [to_primitive(item) for item in self.runtime.ledger.events(resolved_task)],
+                "attributions": [
+                    to_primitive(item) for item in self.runtime.attributions(resolved_task)
+                ],
             }
         if operation == "reset":
             self.runtime.reset(resolved_task)
             return response_envelope("reset", "ok")
         raise ValueError(f"unsupported gui_run operation: {operation}")
 
-    def _response(self, operation: str, status: str, ref: str, diagnostic: bool) -> dict[str, Any]:
-        response = response_envelope(operation, status, object_ref=ref)
+    def _response(
+        self,
+        operation: str,
+        status: str,
+        ref: str,
+        diagnostic: bool,
+        task_id: str | None = None,
+    ) -> dict[str, Any]:
+        attribution_refs = (
+            tuple(item.attribution_id for item in self.runtime.attributions(task_id))
+            if task_id is not None
+            else ()
+        )
+        response = response_envelope(
+            operation, status, object_ref=ref, attribution_refs=attribution_refs
+        )
+        response["task_id"] = task_id
         if diagnostic:
             response["object"] = to_primitive(self.runtime.store.require(ref))
         return response
@@ -258,6 +298,24 @@ def _component_id(component: Any, attribute: str) -> str | None:
     if component is None:
         return None
     return str(getattr(component, attribute, type(component).__name__))
+
+
+def _recovery_for(code: str) -> dict[str, Any]:
+    if code in {
+        "COORDINATE_SPACE_CHANGED",
+        "TARGET_DISAPPEARED",
+        "TARGET_IDENTITY_CHANGED",
+        "TARGET_GEOMETRY_INVALIDATED",
+        "TARGET_OCCLUDED",
+        "HIT_TEST_CHANGED",
+        "CURSOR_ORIGIN_CHANGED",
+    }:
+        return {"retry": True, "required_action": "capture-new-frame"}
+    if code == "CAPABILITY_UNAVAILABLE":
+        return {"retry": False, "required_action": "install-or-configure-provider"}
+    if code in {"MECHANICAL_PERMISSION_DENIED", "SEMANTIC_POLICY_DENIED"}:
+        return {"retry": False, "required_action": "review-task-policy"}
+    return {"retry": True, "required_action": "retry-execution"}
 
 
 def parse_action_proposal(value: dict[str, Any], default_snapshot: str) -> ActionProposal:

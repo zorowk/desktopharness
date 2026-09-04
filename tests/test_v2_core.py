@@ -7,6 +7,7 @@ from mcp_autogui.adapters.evidence.compositor_window import CompositorWindowEvid
 from mcp_autogui.core.action_gate import ActionGate
 from mcp_autogui.core.assertion_evaluator import AssertionEvaluator
 from mcp_autogui.core.ledger import EventLedger
+from mcp_autogui.core.context_builder import ContextBuilder
 from mcp_autogui.core.models import (
     Action,
     ActionProposal,
@@ -309,6 +310,55 @@ class OrchestratorTests(unittest.TestCase):
         two = ledger.append("t", "decision.created", "policy_decision", "d-1", caused_by=(one.event_id,))
         self.assertEqual((one.sequence, two.sequence), (1, 2))
         self.assertEqual(ledger.events("t")[0].object_ref, "p-1")
+
+    def test_missing_evidence_records_a_non_error_attribution(self):
+        spec = AssertionSpec("opened", "active_window.app_id", "equals", "editor")
+        runtime = CoreOrchestrator(FakeCompositor([snapshot()]), FakeExecutor())
+        runtime.register_task(contract(spec))
+
+        _, results, state = runtime.evaluate("task-1")
+
+        self.assertEqual(results[0].status, AssertionStatus.UNKNOWN)
+        self.assertEqual(state.status, TaskStatus.NEEDS_EVIDENCE)
+        attribution = runtime.attributions("task-1")[0]
+        self.assertEqual(attribution.code, "INSUFFICIENT_GROUND_TRUTH")
+        self.assertFalse(attribution.primary)
+
+
+class ContextBuilderTests(unittest.TestCase):
+    def test_strategies_apply_distinct_event_and_frame_budgets(self):
+        ledger = EventLedger()
+        for index in range(5):
+            ledger.append("task-1", "frame.captured", "evidence", f"frame-{index}")
+            ledger.append("task-1", "proposal.created", "action_proposal", f"proposal-{index}")
+        builder = ContextBuilder()
+        task = contract()
+        compact = builder.build(
+            task, TaskState("task-1"), ledger.events("task-1"), based_on_snapshot="snapshot-1"
+        )
+        visual = builder.build(
+            task,
+            TaskState("task-1"),
+            ledger.events("task-1"),
+            based_on_snapshot="snapshot-1",
+            strategy="visual-heavy",
+        )
+        reset = builder.build(
+            task,
+            TaskState("task-1"),
+            ledger.events("task-1"),
+            based_on_snapshot="snapshot-1",
+            strategy="planning-reset",
+        )
+
+        self.assertEqual(len(compact.recent_frame_refs), 1)
+        self.assertEqual(len(visual.recent_frame_refs), 4)
+        proposal_event_ids = {
+            event.event_id
+            for event in ledger.events("task-1")
+            if event.epistemic_type == "action_proposal"
+        }
+        self.assertTrue(proposal_event_ids.isdisjoint(reset.ledger_event_refs))
 
 
 if __name__ == "__main__":

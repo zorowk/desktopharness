@@ -58,6 +58,29 @@ class Executor:
         return ExecutionReceipt(new_id("execution"), proposal.proposal_id, ExecutionStatus.DELIVERED, proposal.action, now, now)
 
 
+class ProposalProvider:
+    provider_id = "fixture-proposal"
+
+    def propose(self, context):
+        from mcp_autogui.core.models import Action, ActionProposal, ActionType
+
+        return ActionProposal(
+            new_id("proposal"),
+            self.provider_id,
+            context.based_on_snapshot,
+            Action(ActionType.POINTER_CLICK, Point(100, 100), "desktop-logical"),
+        )
+
+
+class PolicyProvider:
+    provider_id = "fixture-policy"
+
+    def independent_tags(self, proposal, contract):
+        from mcp_autogui.core.models import EvidenceConfidence, SemanticTag
+
+        return [SemanticTag("navigation", self.provider_id, None, EvidenceConfidence.DETERMINISTIC)]
+
+
 TASK = {
     "task_id": "portable-task",
     "goal": "click a visual target",
@@ -121,6 +144,20 @@ class FacadeTests(unittest.TestCase):
         self.assertEqual(pending["status"], "needs-confirmation")
         self.assertEqual(delivered["status"], "needs-evidence")
         self.assertEqual(repeated["object_ref"], delivered["object_ref"])
+
+    def test_run_exposes_the_bounded_automatic_transaction_loop(self):
+        runtime = CoreOrchestrator(
+            Compositor(),
+            Executor(),
+            proposal_provider=ProposalProvider(),
+            policy_providers=(PolicyProvider(),),
+        )
+        facade = GuiRunFacade(runtime)
+        response = facade.handle("run", task_contract=TASK, max_iterations=1, diagnostic=True)
+
+        self.assertEqual(response["status"], "partial")
+        self.assertEqual(len(response["object"]["iterations"]), 1)
+        self.assertEqual(response["retry"]["required_action"], "continue-run")
 
 
 class Backend:

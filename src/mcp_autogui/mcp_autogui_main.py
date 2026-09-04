@@ -10,16 +10,13 @@ import asyncio
 from copy import deepcopy
 from contextlib import redirect_stdout
 import base64
-import hashlib
 import json
 import subprocess
-import uuid
 import pyautogui
 import pyperclip
 from mcp.server.fastmcp import Image
 import PIL
 import requests
-from .qwen_actions import execute_parsed_actions, parse_qwen_actions, set_absolute_coordinate
 from .qwen_backend import QwenBackendClient
 from .adapters.application_launcher import DdeApplicationLauncher
 from .adapters.compositor import TreelandAdapter
@@ -52,12 +49,9 @@ from .spatial_fusion import (
     actionable_treeland_windows,
     build_action_targets,
     desktop_bounds_from_treeland,
-    desktop_to_screenshot_point,
     flatten_treeland_windows,
     fuse_omniparser_with_treeland,
-    fuse_qwen_actions_with_treeland,
     screenshot_to_desktop_point,
-    screenshot_to_qwen_normalized,
 )
 
 INPUT_IMAGE_SIZE = 960
@@ -192,83 +186,6 @@ def _active_app_task_validation(
         "attempts": application_wait.get("attempts"),
         "waited_ms": application_wait.get("waited_ms"),
     }
-
-
-def _qwen_precision_constraint(
-    expected_action: str,
-    expected_screenshot_coordinate: list[float] | None,
-    coordinate_tolerance_px: float,
-    screenshot_size: tuple[int, int],
-) -> dict | None:
-    """Build a controller-owned constraint for one Qwen mouse-move proposal."""
-    action = expected_action.strip()
-    if not action and expected_screenshot_coordinate is None:
-        return None
-    if action != "mouse_move":
-        raise ValueError("expected_action must be 'mouse_move' when using a coordinate constraint")
-    if not (
-        isinstance(expected_screenshot_coordinate, list)
-        and len(expected_screenshot_coordinate) == 2
-        and all(
-            isinstance(value, (int, float)) and not isinstance(value, bool)
-            for value in expected_screenshot_coordinate
-        )
-    ):
-        raise ValueError("expected_screenshot_coordinate must be a numeric [x, y] pair")
-    if not isinstance(coordinate_tolerance_px, (int, float)) or isinstance(
-        coordinate_tolerance_px, bool
-    ):
-        raise ValueError("coordinate_tolerance_px must be numeric")
-    if not 0 <= coordinate_tolerance_px <= 20:
-        raise ValueError("coordinate_tolerance_px must be between 0 and 20")
-
-    width, height = screenshot_size
-    x, y = (float(value) for value in expected_screenshot_coordinate)
-    if not (0 <= x < width and 0 <= y < height):
-        raise ValueError("expected_screenshot_coordinate is outside the current screenshot")
-    normalized = screenshot_to_qwen_normalized(
-        {"x": x, "y": y}, width, height
-    )
-    return {
-        "expected_action": action,
-        "expected_screenshot_coordinate": {"x": x, "y": y},
-        "qwen_normalized_coordinate": normalized,
-        "coordinate_tolerance_px": float(coordinate_tolerance_px),
-    }
-
-
-def _qwen_constraint_prompt(constraint: dict) -> str:
-    normalized = constraint["qwen_normalized_coordinate"]
-    target = constraint["expected_screenshot_coordinate"]
-    return (
-        "Controller precision constraint (authoritative for this next step):\n"
-        "- Return exactly action `mouse_move`.\n"
-        "- Qwen coordinates use the normalized 0..999 space.\n"
-        f"- Return coordinate [{normalized['x']}, {normalized['y']}] exactly.\n"
-        f"- This is checked against screenshot pixel ({target['x']}, {target['y']})."
-    )
-
-
-def _qwen_constraint_violation(actions: list[dict], constraint: dict | None) -> str | None:
-    if constraint is None:
-        return None
-    if len(actions) != 1 or actions[0].get("type") != "moveTo":
-        return "expected exactly one Qwen mouse_move action"
-    coordinate = actions[0].get("coordinate")
-    if not isinstance(coordinate, dict):
-        return "Qwen mouse_move action has no coordinate"
-    target = constraint["expected_screenshot_coordinate"]
-    tolerance = constraint["coordinate_tolerance_px"]
-    if (
-        abs(float(coordinate["x"]) - target["x"]) > tolerance
-        or abs(float(coordinate["y"]) - target["y"]) > tolerance
-    ):
-        return (
-            "Qwen coordinate does not satisfy the controller constraint: "
-            f"expected screenshot ({target['x']}, {target['y']}) ± {tolerance}px, "
-            f"got ({coordinate['x']}, {coordinate['y']})"
-        )
-    return None
 
 
 def get_treeland_layout_tree(timeout=35):
@@ -801,24 +718,21 @@ def mcp_autogui_main(mcp):
     backend_close = getattr(qwen_backend, "close", None)
     if callable(backend_close):
         atexit.register(backend_close)
-    qwen_sessions = {}
-    qwen_sessions_lock = threading.RLock()
-
-    v2_store = ObjectStore()
-    v2_compositor = TreelandAdapter(
+    store = ObjectStore()
+    compositor = TreelandAdapter(
         tree_reader=lambda: get_treeland_layout_tree(),
         cursor_reader=pyautogui.position,
-        artifact_store=v2_store,
+        artifact_store=store,
     )
-    v2_platform = DeepinKeybindingProvider(
+    platform_policy = DeepinKeybindingProvider(
         loader=lambda: load_keybinding_catalogue(),
         resolver=lambda capability_id: find_capability(capability_id),
     )
 
-    def v2_coordinate_mapper(point, coordinate_space, proposal):
+    def coordinate_mapper(point, coordinate_space, proposal):
         if coordinate_space != "desktop-logical":
             raise ValueError("unsupported executor coordinate space")
-        current = v2_store.require(proposal.based_on_snapshot)
+        current = store.require(proposal.based_on_snapshot)
         width, height = pyautogui.size()
         bounds = current.coordinate_space.bounds
         return Point(
@@ -826,49 +740,51 @@ def mcp_autogui_main(mcp):
             (point.y - bounds.y) * float(height) / bounds.height,
         )
 
-    v2_launcher = DdeApplicationLauncher(
+    launcher = DdeApplicationLauncher(
         runner=lambda *args, **kwargs: subprocess.run(*args, **kwargs)
     )
-    v2_runtime = CoreOrchestrator(
-        v2_compositor,
+
+    def drag_handler(proposal, point):
+        width, height = pyautogui.size()
+        result = _window_manager_drag_to(
+            {
+                "coordinate": {"x": point.x, "y": point.y},
+                "args": [point.x, point.y],
+                "kwargs": {
+                    "duration": proposal.action.parameters.get("duration", 0.5),
+                    "button": proposal.action.parameters.get("button", "left"),
+                },
+            },
+            pyautogui,
+            (int(width), int(height)),
+        )
+        store.put(result, prefix="window-gesture")
+        return True
+
+    runtime = CoreOrchestrator(
+        compositor,
         PyAutoGUIExecutor(
             pyautogui,
-            coordinate_mapper=v2_coordinate_mapper,
-            platform_resolver=v2_platform.resolve,
+            coordinate_mapper=coordinate_mapper,
+            platform_resolver=platform_policy.resolve,
+            drag_handler=drag_handler,
         ),
-        proposal_provider=QwenCUAProposalProvider(qwen_backend, v2_store),
-        frame_provider=PyAutoGUIFrameProvider(pyautogui, v2_store),
-        application_launcher=v2_launcher,
+        proposal_provider=QwenCUAProposalProvider(qwen_backend, store),
+        frame_provider=PyAutoGUIFrameProvider(pyautogui, store),
+        application_launcher=launcher,
         evidence_providers=(CompositorWindowEvidenceProvider(),),
-        policy_providers=(v2_platform,),
-        store=v2_store,
+        policy_providers=(platform_policy,),
+        store=store,
     )
-    v2_facade = GuiRunFacade(v2_runtime)
-
-    def record_qwen_execution(session_id, status, execution=None, reason=None):
-        recorder = getattr(qwen_backend, "record_execution", None)
-        if not callable(recorder):
-            return {"ok": False, "committed": False, "message": "feedback unsupported"}
-        try:
-            return recorder(
-                session_id,
-                status=status,
-                execution=execution,
-                reason=reason,
-            )
-        except Exception as exc:
-            return {
-                "ok": False,
-                "committed": False,
-                "message": f"{type(exc).__name__}: {exc}",
-            }
-
-    def capture_qwen_frame():
+    facade = GuiRunFacade(runtime)
+    def capture_frame():
         screenshot = pyautogui.screenshot().convert("RGB")
         screenshot_buffer = io.BytesIO()
         screenshot.save(screenshot_buffer, format="PNG")
         tree = get_treeland_layout_tree()
         return screenshot_buffer.getvalue(), screenshot.size, tree
+
+
 
     @mcp.tool()
     async def gui_run(
@@ -881,16 +797,17 @@ def mcp_autogui_main(mcp):
         strategy: str = 'compact',
         object_ref: str = '',
         diagnostic: bool = False,
+        max_iterations: int | None = None,
     ) -> dict:
-        """Run one compact AutoUI v2 protocol operation.
+        """运行统一 AutoUI 协议操作。
 
-        Operations are ``describe``, ``observe``, ``propose``, ``decide``,
-        ``execute``, ``evaluate`` (or ``verify``), ``status``, ``reset``, and
-        ``trace``.  Normal responses return object references; pass
-        ``diagnostic=true`` or use ``trace`` to expand an object.
+        支持 ``describe``、``observe``、``propose``、``decide``、
+        ``execute``、``evaluate``/``verify``、``run``、``status``、``reset``、
+        ``trace``。默认返回对象引用；传 ``diagnostic=true`` 或使用 ``trace``
+        查看详细对象。
         """
         return await asyncio.to_thread(
-            v2_facade.handle,
+            facade.handle,
             operation,
             task_id=task_id,
             task_contract=task_contract,
@@ -900,6 +817,7 @@ def mcp_autogui_main(mcp):
             strategy=strategy,
             object_ref=object_ref,
             diagnostic=diagnostic,
+            max_iterations=max_iterations,
         )
 
     @mcp.tool()
@@ -941,8 +859,8 @@ def mcp_autogui_main(mcp):
         if not hotkeys:
             raise ValueError("desktop capability has no keyboard shortcut")
         keys = hotkeys[0]
-        task_id = new_id("legacy-shortcut-task")
-        v2_runtime.register_task(
+        task_id = new_id("shortcut-task")
+        runtime.register_task(
             TaskContract(
                 task_id=task_id,
                 goal=f"Invoke platform capability {capability_id}",
@@ -953,33 +871,32 @@ def mcp_autogui_main(mcp):
                 limits=TaskLimits(max_steps=1, max_retries=0),
             )
         )
-        observed = v2_runtime.observe(task_id)
-        raw_before = v2_store.require(observed.raw_artifact_ref)
+        observed = runtime.observe(task_id)
+        raw_before = store.require(observed.raw_artifact_ref)
         before = _active_window_summary(raw_before)
         proposal = ActionProposal(
             proposal_id=new_id("proposal"),
-            source="legacy-desktop-shortcut-facade",
+            source="desktop-shortcut",
             based_on_snapshot=observed.snapshot_id,
             action=Action(
                 ActionType.PLATFORM_INVOKE,
                 parameters={"capability_id": capability_id.strip()},
             ),
         )
-        v2_runtime.submit_proposal(task_id, proposal)
-        decision = v2_runtime.decide(proposal.proposal_id)
+        runtime.submit_proposal(task_id, proposal)
+        decision = runtime.decide(proposal.proposal_id)
         if decision.status.value != "allow":
-            raise PermissionError(f"v2 policy refused shortcut: {decision.reason_code}")
-        receipt = v2_runtime.execute(proposal.proposal_id)
+            raise PermissionError(f"policy refused shortcut: {decision.reason_code}")
+        receipt = runtime.execute(proposal.proposal_id)
         if receipt.status.value != "delivered":
             return {
                 "status": "failed",
                 "capability": capability,
                 "executed_keys": [],
                 "reason": receipt.error_code,
-                "v2": {"task_id": task_id, "proposal_id": proposal.proposal_id, "execution_id": receipt.execution_id},
             }
         _, _, post_tree, evidence = _capture_post_action_frame(
-            capture_qwen_frame,
+            capture_frame,
             get_treeland_layout_tree,
             "",
             0,
@@ -993,7 +910,6 @@ def mcp_autogui_main(mcp):
                 "active_window_after": _active_window_summary(post_tree),
                 "observation": evidence,
             },
-            "v2": {"task_id": task_id, "proposal_id": proposal.proposal_id, "execution_id": receipt.execution_id},
         }
 
     @mcp.tool()
@@ -1032,7 +948,7 @@ def mcp_autogui_main(mcp):
         resolved_app_id = validate_application_id(app_id)
         expected_app_id = _expected_active_app_id(expected_active_app_id)
         timeout_s = _application_wait_timeout(application_wait_timeout_s)
-        task_id = new_id("legacy-application-task")
+        task_id = new_id("application-task")
         assertions = (
             AssertionSpec(
                 "application-active",
@@ -1041,7 +957,7 @@ def mcp_autogui_main(mcp):
                 expected_app_id,
             ),
         ) if expected_app_id else ()
-        v2_runtime.register_task(
+        runtime.register_task(
             TaskContract(
                 task_id=task_id,
                 goal=f"Launch application {resolved_app_id}",
@@ -1054,11 +970,11 @@ def mcp_autogui_main(mcp):
                 verification_profile="application-open",
             )
         )
-        observed = await asyncio.to_thread(v2_runtime.observe, task_id)
-        active_before = _active_window_summary(v2_store.require(observed.raw_artifact_ref))
+        observed = await asyncio.to_thread(runtime.observe, task_id)
+        active_before = _active_window_summary(store.require(observed.raw_artifact_ref))
         proposal = ActionProposal(
             proposal_id=new_id("proposal"),
-            source="legacy-application-launch-facade",
+            source="desktop-application-launch",
             based_on_snapshot=observed.snapshot_id,
             action=Action(
                 ActionType.APPLICATION_LAUNCH,
@@ -1067,12 +983,12 @@ def mcp_autogui_main(mcp):
             semantic_intent="open_application",
             expected_effect={"active_app_id": expected_app_id} if expected_app_id else {},
         )
-        v2_runtime.submit_proposal(task_id, proposal)
-        decision = v2_runtime.decide(proposal.proposal_id)
+        runtime.submit_proposal(task_id, proposal)
+        decision = runtime.decide(proposal.proposal_id)
         if decision.status.value != "allow":
-            raise PermissionError(f"v2 policy refused application launch: {decision.reason_code}")
-        receipt = await asyncio.to_thread(v2_runtime.execute, proposal.proposal_id)
-        result = v2_launcher.result_for(proposal.proposal_id)
+            raise PermissionError(f"policy refused application launch: {decision.reason_code}")
+        receipt = await asyncio.to_thread(runtime.execute, proposal.proposal_id)
+        result = launcher.result_for(proposal.proposal_id)
         if receipt.status.value != "delivered":
             return {
                 "status": "failed",
@@ -1081,11 +997,10 @@ def mcp_autogui_main(mcp):
                 "stdout": getattr(result, "stdout", None),
                 "stderr": getattr(result, "stderr", None),
                 "reason": receipt.error_code,
-                "v2": {"task_id": task_id, "proposal_id": proposal.proposal_id, "execution_id": receipt.execution_id},
             }
 
         _, _, post_tree, application_wait = _capture_post_action_frame(
-            capture_qwen_frame,
+            capture_frame,
             get_treeland_layout_tree,
             expected_app_id,
             timeout_s,
@@ -1097,7 +1012,7 @@ def mcp_autogui_main(mcp):
             active_after,
             application_wait,
         )
-        _, assertion_results, v2_state = await asyncio.to_thread(v2_runtime.evaluate, task_id)
+        _, assertion_results, task_state = await asyncio.to_thread(runtime.evaluate, task_id)
         return {
             "status": (
                 "success"
@@ -1114,645 +1029,8 @@ def mcp_autogui_main(mcp):
                 "application_wait": application_wait,
             },
             "task_validation": task_validation,
-            "v2": {
-                "task_id": task_id,
-                "proposal_id": proposal.proposal_id,
-                "execution_id": receipt.execution_id,
-                "assertion_statuses": [item.status.value for item in assertion_results],
-                "task_status": v2_state.status.value,
-            },
         }
 
-    @mcp.tool()
-    async def qwen_cua_predict(
-        instruction: str,
-        session_id: str = '',
-        reset: bool = False,
-        expected_action: str = '',
-        expected_screenshot_coordinate: list[float] | None = None,
-        coordinate_tolerance_px: float = 2.0,
-        expected_active_app_id: str = '',
-        application_wait_timeout_s: float = DEFAULT_APPLICATION_WAIT_TIMEOUT_S,
-    ) -> list:
-        """Ask Qwen-CUA for one GUI step and fuse its coordinates with Treeland.
-
-    This tool does not execute the returned actions. Inspect the deterministic
-    Treeland target and validation data, then call qwen_cua_execute.
-
-    Args:
-        instruction: The bounded GUI task for the current Qwen-CUA session.
-        session_id: Reuse the returned ID for subsequent steps of the same task.
-        reset: Reset the backend session before this prediction.
-        expected_action: Optional controller constraint; currently supports
-            ``mouse_move`` only.
-        expected_screenshot_coordinate: Optional screenshot-pixel target for
-            the constrained Qwen action. It is converted to Qwen's native
-            0..999 coordinate space and checked after prediction.
-        coordinate_tolerance_px: Allowed screenshot-pixel error for the
-            constrained result (0 to 20).
-        expected_active_app_id: Optional window-level completion assertion.
-            After execution, Treeland is polled until this appId becomes active
-            or ``application_wait_timeout_s`` expires.
-        application_wait_timeout_s: Seconds to wait for the expected appId
-            after execution (0 to 30).
-        """
-        normalized_instruction = instruction.strip()
-        if not normalized_instruction:
-            raise ValueError("instruction must not be empty")
-        resolved_session_id = session_id.strip() or f"treeland-autoui-{uuid.uuid4().hex}"
-
-        with qwen_sessions_lock:
-            existing_state = qwen_sessions.get(resolved_session_id)
-        requested_expected_app_id = _expected_active_app_id(expected_active_app_id)
-        inherited_expected_app_id = (
-            str(existing_state.get("expected_active_app_id") or "")
-            if existing_state and not reset
-            else ""
-        )
-        resolved_expected_app_id = requested_expected_app_id or inherited_expected_app_id
-        resolved_application_wait_timeout_s = _application_wait_timeout(
-            application_wait_timeout_s
-        )
-        if existing_state and not existing_state.get("execution_complete"):
-            if not existing_state.get("requires_reset"):
-                raise RuntimeError(
-                    "The previous Qwen-CUA prediction is still pending; execute it or reset the session"
-                )
-        instruction_changed = bool(
-            existing_state
-            and existing_state.get("instruction") != normalized_instruction
-        )
-        if instruction_changed and not requested_expected_app_id:
-            resolved_expected_app_id = ""
-        expectation_changed = bool(
-            existing_state
-            and requested_expected_app_id
-            and inherited_expected_app_id
-            and requested_expected_app_id != inherited_expected_app_id
-        )
-        state_requires_reset = bool(existing_state and existing_state.get("requires_reset"))
-        if reset or instruction_changed or expectation_changed or state_requires_reset:
-            await asyncio.to_thread(qwen_backend.reset, resolved_session_id)
-            with qwen_sessions_lock:
-                qwen_sessions.pop(resolved_session_id, None)
-
-        stage_t0 = time.perf_counter()
-        screenshot_bytes, screenshot_size, treeland_tree = await asyncio.to_thread(
-            capture_qwen_frame
-        )
-        stage_t1 = time.perf_counter()
-        constraint = _qwen_precision_constraint(
-            expected_action,
-            expected_screenshot_coordinate,
-            coordinate_tolerance_px,
-            screenshot_size,
-        )
-        model_instruction = normalized_instruction
-        if constraint is not None:
-            model_instruction = f"{normalized_instruction}\n\n{_qwen_constraint_prompt(constraint)}"
-        stage_t2 = time.perf_counter()
-        with qwen_sessions_lock:
-            previous = qwen_sessions.get(resolved_session_id) or {}
-            client_step = int(previous.get("step", 0)) + 1
-
-        backend_result = await asyncio.to_thread(
-            qwen_backend.predict,
-            model_instruction,
-            screenshot_bytes,
-            resolved_session_id,
-            image_mime="image/png",
-            client_step=client_step,
-            session_instruction=normalized_instruction,
-        )
-        stage_t3 = time.perf_counter()
-        try:
-            parsed_actions = parse_qwen_actions(backend_result.get("actions", []))
-            violation = _qwen_constraint_violation(parsed_actions, constraint)
-            if violation is not None:
-                raise ValueError(violation)
-        except Exception as exc:
-            await asyncio.to_thread(
-                record_qwen_execution,
-                resolved_session_id,
-                "rejected",
-                {
-                    "constraint": constraint,
-                    "proposed_actions": backend_result.get("actions", []),
-                },
-                f"Proposal validation rejected: {type(exc).__name__}: {exc}",
-            )
-            raise ValueError(f"Qwen proposal rejected by controller validation: {exc}") from exc
-        stage_t4 = time.perf_counter()
-        fused = fuse_qwen_actions_with_treeland(
-            parsed_actions,
-            treeland_tree,
-            screenshot_size,
-        )
-        stage_t5 = time.perf_counter()
-        frame_id = f"frame-{uuid.uuid4().hex}"
-        with qwen_sessions_lock:
-            qwen_sessions[resolved_session_id] = {
-                "session_id": resolved_session_id,
-                "instruction": normalized_instruction,
-                "step": client_step,
-                "frame_id": frame_id,
-                "screenshot_size": screenshot_size,
-                "screenshot_sha256": hashlib.sha256(screenshot_bytes).hexdigest(),
-                "parsed_actions": parsed_actions,
-                "fused": fused,
-                "expected_active_app_id": resolved_expected_app_id,
-                "application_wait_timeout_s": resolved_application_wait_timeout_s,
-                "execution_complete": False,
-                "requires_reset": False,
-            }
-
-        response = {
-            "session_id": resolved_session_id,
-            "frame_id": frame_id,
-            "step": client_step,
-            "instruction": normalized_instruction,
-            "task_expectation": {
-                "expected_active_app_id": resolved_expected_app_id or None,
-                "application_wait_timeout_s": resolved_application_wait_timeout_s,
-            },
-            "coordinate_constraint": constraint,
-            "agent_type": backend_result.get("agent_type"),
-            "observation": backend_result.get("observation_text", ""),
-            "action_text": backend_result.get("action_text", ""),
-            "assistant_output": backend_result.get("assistant_output", ""),
-            "fused_actions": fused,
-            "telemetry": {
-                **backend_result.get("telemetry", {}),
-                "stage_timings_ms": {
-                    "frame_capture_ms": round((stage_t1 - stage_t0) * 1000, 2),
-                    "constraint_ms": round((stage_t2 - stage_t1) * 1000, 2),
-                    "model_predict_ms": round((stage_t3 - stage_t2) * 1000, 2),
-                    "parse_validate_ms": round((stage_t4 - stage_t3) * 1000, 2),
-                    "fusion_ms": round((stage_t5 - stage_t4) * 1000, 2),
-                    "total_ms": round((stage_t5 - stage_t0) * 1000, 2),
-                },
-            },
-        }
-        return [
-            json.dumps(response, ensure_ascii=False, indent=2),
-            Image(data=screenshot_bytes, format="png"),
-        ]
-
-    @mcp.tool()
-    async def qwen_cua_execute(
-        session_id: str,
-        action_indexes: list[int] | None = None,
-    ) -> dict:
-        """Execute selected actions from the latest Qwen-CUA prediction.
-
-    Actions are parsed through a strict allowlist. Coordinate actions are
-    refused when the latest Treeland tree no longer resolves to the same target
-    window as the prediction frame.
-
-    Args:
-        session_id: ID returned by qwen_cua_predict.
-        action_indexes: Fused action indexes to execute; omit to execute all.
-        """
-        with qwen_sessions_lock:
-            state = qwen_sessions.get(session_id)
-        if state is None:
-            raise ValueError("No pending Qwen-CUA prediction for this session_id")
-
-        parsed_actions = state["parsed_actions"]
-        if action_indexes is not None:
-            if any(not isinstance(index, int) or isinstance(index, bool) for index in action_indexes):
-                raise ValueError("action_indexes must contain integers")
-            if any(index < 0 or index >= len(parsed_actions) for index in action_indexes):
-                raise ValueError("action_indexes contains an out-of-range index")
-
-        stage_t0 = time.perf_counter()
-        latest_tree = await asyncio.to_thread(get_treeland_layout_tree)
-        stage_t1 = time.perf_counter()
-        latest_desktop_bounds = desktop_bounds_from_treeland(latest_tree)
-        latest_fused = fuse_qwen_actions_with_treeland(
-            parsed_actions,
-            latest_tree,
-            state["screenshot_size"],
-        )
-        stage_t2 = time.perf_counter()
-        selected = set(action_indexes) if action_indexes is not None else set(range(len(parsed_actions)))
-        refusals = []
-        original_fused_actions = state["fused"]["actions"]
-        latest_fused_actions = latest_fused["actions"]
-        for index in sorted(selected):
-            action = parsed_actions[index]
-            # A drag starts at the current pointer, not at its destination.
-            # It is validated by _window_manager_drag_to immediately before
-            # entering WM move mode.
-            if action.get("type") == "dragTo":
-                continue
-            if action.get("coordinate") is None:
-                continue
-            original_target = original_fused_actions[index].get("target_window")
-            latest_target = latest_fused_actions[index].get("target_window")
-            if original_target is None or latest_target is None:
-                refusals.append({"action_index": index, "reason": "target_window_missing"})
-                continue
-            identity_keys = ("appId", "title", "container", "workspace")
-            if any(original_target.get(key) != latest_target.get(key) for key in identity_keys):
-                refusals.append(
-                    {
-                        "action_index": index,
-                        "reason": "target_window_changed",
-                        "predicted_target": original_target,
-                        "current_target": latest_target,
-                    }
-                )
-
-        if refusals:
-            backend_feedback = await asyncio.to_thread(
-                record_qwen_execution,
-                session_id,
-                "rejected",
-                {
-                    "frame_id": state["frame_id"],
-                    "selected_action_indexes": sorted(selected),
-                    "refusals": refusals,
-                },
-                "Treeland target validation rejected the proposal",
-            )
-            can_continue = bool(backend_feedback.get("ok"))
-            with qwen_sessions_lock:
-                current_state = qwen_sessions.get(session_id)
-                if current_state is state:
-                    current_state["execution_complete"] = can_continue
-                    current_state["requires_reset"] = not can_continue
-            return {
-                "session_id": session_id,
-                "frame_id": state["frame_id"],
-                "status": "refused",
-                "refusals": refusals,
-                "backend_feedback": backend_feedback,
-                "stage_timings_ms": {
-                    "tree_ms": round((stage_t1 - stage_t0) * 1000, 2),
-                    "refusion_ms": round((stage_t2 - stage_t1) * 1000, 2),
-                },
-                "session_continuable": can_continue,
-                "guidance": (
-                    "Call qwen_cua_predict again with this session; the embedded backend received the rejection."
-                    if can_continue
-                    else "Reset this session, or call qwen_cua_predict again to auto-reset it."
-                ),
-            }
-
-        execution_actions = deepcopy(parsed_actions)
-        for index in sorted(selected):
-            original = original_fused_actions[index]
-            latest = latest_fused_actions[index]
-            # dragTo's coordinate is its requested final pointer position.
-            # It must remain absolute; reprojecting it relative to whichever
-            # window happens to be under the destination changes its meaning.
-            if parsed_actions[index].get("type") == "dragTo":
-                continue
-            if original.get("desktop_coordinate") is None:
-                continue
-            original_target = original.get("target_window") or {}
-            latest_target = latest.get("target_window") or {}
-            relative = original_target.get("window_relative_coordinate")
-            latest_geometry = latest_target.get("geometry") or {}
-            if isinstance(relative, dict) and latest_geometry:
-                execution_coordinate = {
-                    "x": float(latest_geometry.get("x") or 0) + float(relative.get("x") or 0),
-                    "y": float(latest_geometry.get("y") or 0) + float(relative.get("y") or 0),
-                }
-            else:
-                execution_coordinate = latest["desktop_coordinate"]
-            input_coordinate = desktop_to_screenshot_point(
-                execution_coordinate,
-                state["screenshot_size"][0],
-                state["screenshot_size"][1],
-                latest_desktop_bounds,
-            )
-            set_absolute_coordinate(execution_actions[index], input_coordinate)
-
-        stage_t3 = time.perf_counter()
-        execution_results = await asyncio.to_thread(
-            execute_parsed_actions,
-            execution_actions,
-            pyautogui,
-            action_indexes=action_indexes,
-            drag_handler=lambda action: _window_manager_drag_to(
-                action, pyautogui, state["screenshot_size"]
-            ),
-        )
-        stage_t4 = time.perf_counter()
-        try:
-            cursor_x, cursor_y = await asyncio.to_thread(pyautogui.position)
-            post_action_cursor = {"x": float(cursor_x), "y": float(cursor_y)}
-            post_action_cursor_error = None
-        except Exception as exc:
-            post_action_cursor = None
-            post_action_cursor_error = f"{type(exc).__name__}: {exc}"
-        stage_t5 = time.perf_counter()
-        post_screenshot_bytes = None
-        post_screenshot_size = None
-        post_tree = None
-        post_observation_error = None
-        expected_active_app_id = str(state.get("expected_active_app_id") or "")
-        application_wait_timeout_s = float(
-            state.get("application_wait_timeout_s", DEFAULT_APPLICATION_WAIT_TIMEOUT_S)
-        )
-        (
-            post_screenshot_bytes,
-            post_screenshot_size,
-            post_tree,
-            application_wait,
-        ) = await asyncio.to_thread(
-            _capture_post_action_frame,
-            capture_qwen_frame,
-            get_treeland_layout_tree,
-            expected_active_app_id,
-            application_wait_timeout_s,
-        )
-        post_observation_error = application_wait.get("observation_error")
-        stage_t6 = time.perf_counter()
-        all_actions_selected = selected == set(range(len(parsed_actions)))
-        all_actions_succeeded = bool(execution_results) and all(
-            item.get("status") == "success" for item in execution_results
-        )
-        active_before = _active_window_summary(latest_tree)
-        active_after = _active_window_summary(post_tree) if post_tree is not None else None
-        task_validation = _active_app_task_validation(
-            expected_active_app_id,
-            active_before,
-            active_after,
-            application_wait,
-        )
-        windows_before = len(actionable_treeland_windows(latest_tree))
-        windows_after = (
-            len(actionable_treeland_windows(post_tree)) if post_tree is not None else None
-        )
-        target_before = None
-        target_after = None
-        target_identity_status = None
-        for index in sorted(selected):
-            action = parsed_actions[index]
-            if action.get("type") == "dragTo":
-                continue
-            if action.get("coordinate") is None:
-                continue
-            original_target = original_fused_actions[index].get("target_window")
-            if original_target:
-                identity = {
-                    key: original_target.get(key)
-                    for key in ("appId", "title", "container", "workspace")
-                }
-                before_matches = _matching_windows_by_identity(latest_tree, identity)
-                after_matches = (
-                    _matching_windows_by_identity(post_tree, identity)
-                    if post_tree is not None
-                    else []
-                )
-                if len(before_matches) == 1:
-                    target_before = deepcopy(before_matches[0].get("geometry"))
-                if len(after_matches) == 1:
-                    target_after = deepcopy(after_matches[0].get("geometry"))
-                target_identity_status = (
-                    "ambiguous_before" if len(before_matches) != 1 else
-                    "missing_after" if len(after_matches) == 0 else
-                    "ambiguous_after" if len(after_matches) != 1 else
-                    "verified"
-                )
-            break
-        window_move_validation = []
-        for item in execution_results:
-            result = item.get("result")
-            if not isinstance(result, dict) or result.get("kind") not in {
-                "wm_window_move",
-                "native_window_resize",
-            }:
-                continue
-            identity = result["source_window_identity"]
-            after_matches = (
-                _matching_windows_by_identity(post_tree, identity)
-                if post_tree is not None
-                else []
-            )
-            after_geometry = (
-                deepcopy(after_matches[0].get("geometry") or {})
-                if len(after_matches) == 1
-                else None
-            )
-            size_changed = (
-                after_geometry is not None
-                and (
-                    after_geometry.get("width") != result["source_geometry_before"].get("width")
-                    or after_geometry.get("height") != result["source_geometry_before"].get("height")
-                )
-            )
-            geometry_changed = after_geometry is not None and after_geometry != result["source_geometry_before"]
-            verified = size_changed if result["kind"] == "native_window_resize" else geometry_changed
-            status = (
-                "verified"
-                if verified
-                else "not_observed"
-                if after_geometry is not None
-                else "identity_unavailable"
-            )
-            window_move_validation.append(
-                {
-                    **result,
-                    "source_geometry_after": after_geometry,
-                    "status": status,
-                }
-            )
-        validation_failures = []
-        if post_observation_error is not None:
-            validation_failures.append("post_observation_unavailable")
-        if target_identity_status in {"ambiguous_before", "missing_after", "ambiguous_after"}:
-            validation_failures.append(f"target_identity_{target_identity_status}")
-        if any(item["status"] != "verified" for item in window_move_validation):
-            validation_failures.append("window_gesture_not_verified")
-        post_screenshot_sha256 = (
-            hashlib.sha256(post_screenshot_bytes).hexdigest()
-            if post_screenshot_bytes is not None
-            else None
-        )
-        post_validation = {
-            "active_window_before": active_before,
-            "active_window_after": active_after,
-            "active_window_changed": (active_before or {}).get("title")
-            != (active_after or {}).get("title"),
-            "actionable_windows_before": windows_before,
-            "actionable_windows_after": windows_after,
-            "target_geometry_before": target_before,
-            "target_geometry_after": target_after,
-            "target_identity_status": target_identity_status,
-            "target_moved": bool(
-                target_before is not None
-                and target_after is not None
-                and target_before != target_after
-            ),
-            "window_moves": window_move_validation,
-            "screenshot_size": (
-                {"width": post_screenshot_size[0], "height": post_screenshot_size[1]}
-                if post_screenshot_size is not None
-                else None
-            ),
-            "screenshot_sha256": post_screenshot_sha256,
-            "screenshot_changed": (
-                post_screenshot_sha256 != state["screenshot_sha256"]
-                if post_screenshot_sha256 is not None
-                else None
-            ),
-            "observation_error": post_observation_error,
-            "validation_failures": validation_failures,
-            "application_wait": application_wait,
-            "task_validation": task_validation,
-        }
-        task_validation_passed = (
-            task_validation is None or task_validation.get("status") == "passed"
-        )
-        if (
-            all_actions_selected
-            and all_actions_succeeded
-            and not validation_failures
-            and task_validation_passed
-        ):
-            feedback_status = "success"
-        elif all_actions_succeeded and not validation_failures:
-            feedback_status = "partial"
-        else:
-            feedback_status = "error"
-        feedback_reason = None
-        if not all_actions_succeeded:
-            feedback_reason = "One or more actions failed"
-        elif validation_failures:
-            feedback_reason = "Post-action validation failed: " + ", ".join(validation_failures)
-        elif not task_validation_passed:
-            feedback_reason = (
-                "Window-level task assertion did not pass: "
-                f"{task_validation.get('reason')}"
-            )
-        backend_feedback = await asyncio.to_thread(
-            record_qwen_execution,
-            session_id,
-            feedback_status,
-            {
-                "frame_id": state["frame_id"],
-                "selected_action_indexes": sorted(selected),
-                "actual_actions": [execution_actions[index] for index in sorted(selected)],
-                "results": execution_results,
-                "post_action_cursor": post_action_cursor,
-                "post_action_cursor_error": post_action_cursor_error,
-                "post_validation": post_validation,
-            },
-            feedback_reason,
-        )
-        stage_t7 = time.perf_counter()
-        feedback_recorded = bool(backend_feedback.get("ok"))
-        session_continuable = (
-            feedback_recorded
-            and all_actions_selected
-            and all_actions_succeeded
-            and not validation_failures
-        )
-        with qwen_sessions_lock:
-            current_state = qwen_sessions.get(session_id)
-            if current_state is state:
-                current_state["last_execution"] = execution_results
-                current_state["execution_complete"] = True
-                current_state["requires_reset"] = not session_continuable
-
-        execution_succeeded = bool(execution_results) and all(
-            item.get("status") == "success" for item in execution_results
-        )
-        task_completed = (
-            task_validation.get("status") == "passed"
-            if task_validation is not None
-            else None
-        )
-        return {
-            "session_id": session_id,
-            "frame_id": state["frame_id"],
-            "status": (
-                "success"
-                if (
-                    all_actions_selected
-                    and execution_succeeded
-                    and not validation_failures
-                    and task_validation_passed
-                )
-                else "partial"
-                if execution_succeeded and not validation_failures
-                else "error"
-            ),
-            "session_continuable": session_continuable,
-            "task_completed": task_completed,
-            "task_validation": task_validation,
-            "execution_results": execution_results,
-            "executed_actions": [execution_actions[index] for index in sorted(selected)],
-            "post_action_cursor": post_action_cursor,
-            "post_action_cursor_error": post_action_cursor_error,
-            "backend_feedback": backend_feedback,
-            "post_action_windows": (
-                len(actionable_treeland_windows(post_tree)) if post_tree is not None else None
-            ),
-            "post_tree_error": post_observation_error,
-            "post_validation": post_validation,
-            "stage_timings_ms": {
-                "tree_ms": round((stage_t1 - stage_t0) * 1000, 2),
-                "refusion_ms": round((stage_t2 - stage_t1) * 1000, 2),
-                "prep_ms": round((stage_t3 - stage_t2) * 1000, 2),
-                "execute_ms": round((stage_t4 - stage_t3) * 1000, 2),
-                "cursor_ms": round((stage_t5 - stage_t4) * 1000, 2),
-                "post_observation_ms": round((stage_t6 - stage_t5) * 1000, 2),
-                "feedback_ms": round((stage_t7 - stage_t6) * 1000, 2),
-                "total_ms": round((stage_t7 - stage_t0) * 1000, 2),
-            },
-            "next": (
-                "The expected application is active; the window-level task is complete."
-                if task_completed
-                else "Call qwen_cua_predict with the same session_id for the next step."
-                if session_continuable
-                else "The action was not fully completed and recorded; the next prediction will reset this session."
-            ),
-        }
-
-    @mcp.tool()
-    async def qwen_cua_reset(session_id: str) -> bool:
-        """Reset a Qwen-CUA backend session and discard its pending local frame."""
-        await asyncio.to_thread(qwen_backend.reset, session_id)
-        with qwen_sessions_lock:
-            qwen_sessions.pop(session_id, None)
-        return True
-
-    @mcp.tool()
-    async def qwen_cua_status() -> dict:
-        """Check Qwen-CUA backend connectivity and local pending sessions."""
-        health = await asyncio.to_thread(qwen_backend.health)
-        with qwen_sessions_lock:
-            sessions = [
-                {
-                    "session_id": value["session_id"],
-                    "instruction": value["instruction"],
-                    "step": value["step"],
-                    "frame_id": value["frame_id"],
-                    "expected_active_app_id": value.get("expected_active_app_id") or None,
-                }
-                for value in qwen_sessions.values()
-            ]
-            pending = [
-                {
-                    "session_id": value["session_id"],
-                    "instruction": value["instruction"],
-                    "step": value["step"],
-                    "frame_id": value["frame_id"],
-                    "expected_active_app_id": value.get("expected_active_app_id") or None,
-                }
-                for value in qwen_sessions.values()
-                if not value.get("execution_complete") and not value.get("requires_reset")
-            ]
-        return {
-            "backend": health,
-            "pending_sessions": pending,
-            "known_sessions": sessions,
-        }
 
     if _env_enabled("GUI_OMNIPARSER_ENABLED"):
         register_omniparser_tools(mcp)

@@ -152,6 +152,10 @@ class ActionGate:
         cursor_origin = None
         if action.type in _POINTER_TARGET_ACTIONS:
             point = action.coordinate
+            if action.parameters.get("relative"):
+                if snapshot.cursor is None:
+                    return None, (PolicyStatus.INVALID, "CAPABILITY_UNAVAILABLE")
+                cursor_origin = snapshot.cursor
             if action.type == ActionType.POINTER_DRAG:
                 if snapshot.cursor is None:
                     return None, (PolicyStatus.INVALID, "CAPABILITY_UNAVAILABLE")

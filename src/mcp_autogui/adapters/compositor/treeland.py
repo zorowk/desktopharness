@@ -94,7 +94,13 @@ class TreelandAdapter:
         return self._bounds(tree)
 
     def observe(self) -> CanonicalSnapshot:
-        raw = deepcopy(self._tree_reader())
+        return self.observe_raw(self._tree_reader(), self.get_cursor_position())
+
+    def observe_raw(
+        self, raw_tree: dict[str, Any], cursor: Point | None = None
+    ) -> CanonicalSnapshot:
+        """Normalize an already captured tree without performing another transport read."""
+        raw = deepcopy(raw_tree)
         canonical_source = deepcopy(raw)
         bounds = self._bounds(canonical_source)
         raw_ref = self._artifacts.put(raw, prefix="treeland-tree")
@@ -150,7 +156,7 @@ class TreelandAdapter:
             environment_version=environment_version,
             coordinate_space=CoordinateSpace("desktop-logical", bounds, geometry_version),
             outputs=(OutputFact("desktop", bounds, None),),
-            cursor=self.get_cursor_position(),
+            cursor=cursor,
             windows=tuple(windows),
             raw_artifact_ref=raw_ref,
         )

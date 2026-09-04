@@ -42,21 +42,27 @@ export CUA_MODEL_TLS_VERIFY=1                 # 仅自签名测试端点才显�
 
 需要与旧部署对比时，可设置 `CUA_BACKEND_MODE=http`，并继续使用 `CUA_BACKEND_URL`、`CUA_BACKEND_API_KEY` 和 `CUA_TLS_VERIFY`。HTTP 模式只是兼容路径，不是默认依赖。
 
-Qwen-CUA 工具采用显式的两阶段流程：
+所有 Qwen 交互统一走 `gui_run` 工具；旧的 `qwen_cua_*` 工具已删除。内嵌
+后端通过 task contract 寻址，每轮只产出一个 canonical action：
 
-1. 调用 `qwen_cua_predict(instruction)` 获取一个 `session_id`、Qwen 动作步骤，以及动作坐标与 Treeland window tree 的融合结果。此调用不会执行动作。
-2. 检查 `fused_actions` 中的目标窗口和校验信息，然后调用 `qwen_cua_execute(session_id, action_indexes)` 执行全部或选定动作。
-3. 使用同一个 `session_id` 再次调用 `qwen_cua_predict` 获取下一步。新任务应使用新的 session，或先调用 `qwen_cua_reset`。
+1. `gui_run(operation="run", task_contract={"task_id": ..., "goal": ...,
+   "permissions": {...}, "limits": {"max_steps": 5, "max_retries": 2},
+   "policy_overrides": {"unknown": "allow", "content_edit": "allow"}})`
+   执行有界的单动作事务循环：
+   observe -> propose（Qwen）-> decide -> guard 重检 -> execute ->
+   evaluate -> 归约任务状态，直到任务阻塞或终止。
+2. 需要细粒度控制时使用显式操作：`observe`、`propose`、`decide`、
+   `execute`、`evaluate`（或 `verify`）、`status`、`reset`、`trace`。
+   响应默认只返回对象引用；传 `diagnostic=true` 或使用 `trace` 展开
+   存储对象，例如模型输出（`debug_ref`）、执行回执或断言结果。
+3. `gui_run(operation="reset", task_id=...)` 会重置运行时任务和内嵌
+   Qwen session，用于开始新任务。
 
-这些 `qwen_cua_*` 工具作为迁移兼容接口继续保留。新集成应使用
-`gui_run`；其 Qwen adapter 会拒绝多动作 Proposal。
-
-打开应用等具有窗口级完成条件的任务，可以在首次预测时传入
-`expected_active_app_id="deepin-editor"`。执行动作后，MCP 会在
-`application_wait_timeout_s`（默认 3 秒）内轮询 Treeland Tree，并在结束时采集一次最终截图和 Tree：预期应用成为活动窗口时返回 `task_completed: true`；打开错误应用或超时时返回 `status: "partial"` 和结构化 `task_validation`，并保留同一 session 供下一轮纠错。Qwen 返回 `DONE` 也不能绕过该 appId 断言。后续使用同一 session 时可省略 `expected_active_app_id`，本机任务状态会继承首次设置。
-
-需要由控制层做精确坐标校准、但仍必须经过 Qwen 时，向 `qwen_cua_predict` 传入
-`expected_action="mouse_move"` 和 `expected_screenshot_coordinate=[x, y]`。控制层会把截图目标换算为 Qwen 原生的 0–999 坐标，要求 Qwen 给出这一个提案，并拒绝超出像素容差的返回。普通视觉任务不应传这些可选约束。
+窗口级完成条件通过 task contract 的 assertions 声明，例如
+`assertions: [{"assertion_id": "application-active", "path":
+"active_window.app_id", "operator": "equals", "expected": "deepin-editor"}]`。
+评估器在每个动作之后采集证据；断言未通过前，Qwen 返回 `DONE` 也不能把
+任务标记为完成。
 
 模型输出只允许经过 AST 解析的 `pyautogui` 白名单动作；任意 Python、动态表达式和未允许的函数都会被拒绝。执行前会重新读取 Treeland tree，如果动作坐标命中的窗口与预测时不同，也会拒绝执行。
 

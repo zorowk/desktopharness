@@ -27,6 +27,8 @@ from .models import (
     Attribution,
     AttributionEventKind,
     AttributionEvidenceStatus,
+    AttributionOwner,
+    AttributionStage,
     CanonicalSnapshot,
     EvidenceRecord,
     ExecutionReceipt,
@@ -39,6 +41,7 @@ from .models import (
     TaskState,
     TaskStatus,
     new_id,
+    to_primitive,
     utc_now,
 )
 from .store import ObjectStore
@@ -97,6 +100,8 @@ class CoreOrchestrator:
         self._latest_results: dict[str, tuple[AssertionResult, ...]] = {}
         self._verified_facts: dict[str, tuple[dict[str, Any], ...]] = {}
         self._object_events: dict[str, str] = {}
+        self._primary_attribution: dict[str, str] = {}
+        self._attribution_keys: set[tuple[str, str, str]] = set()
         self._execution_lock = RLock()
 
     def register_task(self, contract: TaskContract) -> TaskState:
@@ -123,7 +128,11 @@ class CoreOrchestrator:
 
     def observe(self, task_id: str) -> CanonicalSnapshot:
         self._require_task(task_id)
-        snapshot = self.compositor.observe()
+        return self.adopt_snapshot(task_id, self.compositor.observe())
+
+    def adopt_snapshot(self, task_id: str, snapshot: CanonicalSnapshot) -> CanonicalSnapshot:
+        """Record a canonical observation captured by an adapter-aware facade."""
+        self._require_task(task_id)
         self._latest_snapshot[task_id] = snapshot
         self.store.put(snapshot, object_ref=snapshot.snapshot_id)
         self._append_event(
@@ -146,6 +155,15 @@ class CoreOrchestrator:
         if frame is not None:
             self._latest_frame[task_id] = frame
             self.store.put(frame, object_ref=frame.frame_id)
+            self._append_event(
+                task_id,
+                "frame.captured",
+                "evidence",
+                frame.frame_id,
+                caused_by=self._causes_for(snapshot.snapshot_id),
+                snapshot_id=snapshot.snapshot_id,
+                artifact_refs=(frame.image_ref,),
+            )
         context = self.context_builder.build(
             contract,
             state,
@@ -181,6 +199,11 @@ class CoreOrchestrator:
                     else None
                 ),
             },
+            primary_attribution=(
+                to_primitive(self.store.require(self._primary_attribution[task_id]))
+                if task_id in self._primary_attribution
+                else None
+            ),
             strategy=strategy,
         )
         self.store.put(context, object_ref=context.model_context_id)
@@ -262,14 +285,28 @@ class CoreOrchestrator:
         )
         return decision
 
-    def execute(self, proposal_id: str, *, confirmed: bool = False) -> ExecutionReceipt:
+    def execute(
+        self,
+        proposal_id: str,
+        *,
+        confirmed: bool = False,
+        current_snapshot: CanonicalSnapshot | None = None,
+    ) -> ExecutionReceipt:
         # Observation, guard recheck, and input injection are one critical
         # section across tasks; otherwise another task could alter the desktop
         # between validation and the side effect.
         with self._execution_lock:
-            return self._execute(proposal_id, confirmed=confirmed)
+            return self._execute(
+                proposal_id, confirmed=confirmed, current_snapshot=current_snapshot
+            )
 
-    def _execute(self, proposal_id: str, *, confirmed: bool = False) -> ExecutionReceipt:
+    def _execute(
+        self,
+        proposal_id: str,
+        *,
+        confirmed: bool = False,
+        current_snapshot: CanonicalSnapshot | None = None,
+    ) -> ExecutionReceipt:
         task_id = self._proposal_task.get(proposal_id)
         if task_id is None:
             raise KeyError(proposal_id)
@@ -303,7 +340,11 @@ class CoreOrchestrator:
                 notify_provider=not pending_confirmation,
             )
 
-        latest = self.observe(task_id)
+        latest = (
+            self.adopt_snapshot(task_id, current_snapshot)
+            if current_snapshot is not None
+            else self.observe(task_id)
+        )
         guard = self._guards.get(decision.guard_ref or "")
         if guard is not None:
             guard_error = self.gate.recheck(guard, latest)
@@ -437,6 +478,37 @@ class CoreOrchestrator:
                     ),
                     snapshot_id=snapshot.snapshot_id,
                 )
+        if state.status in {TaskStatus.RETRY, TaskStatus.FAILED}:
+            failed_refs = tuple(
+                ref
+                for result in results
+                if result.status == AssertionStatus.FAILED
+                for ref in result.evidence_refs
+            )
+            self._record_attribution(
+                task_id,
+                AttributionEventKind.ERROR,
+                AttributionStage.OUTCOME,
+                AttributionOwner.UNKNOWN,
+                "OUTCOME_POSTCONDITION_FAILED" if failed_refs else "ROOT_CAUSE_UNRESOLVED",
+                "One or more required task assertions did not pass",
+                evidence_refs=failed_refs,
+                evidence_status=(
+                    AttributionEvidenceStatus.CONFIRMED
+                    if failed_refs
+                    else AttributionEvidenceStatus.INSUFFICIENT
+                ),
+            )
+        elif state.status == TaskStatus.NEEDS_EVIDENCE:
+            self._record_attribution(
+                task_id,
+                AttributionEventKind.INSUFFICIENT_EVIDENCE,
+                AttributionStage.OUTCOME,
+                AttributionOwner.UNKNOWN,
+                "INSUFFICIENT_GROUND_TRUTH",
+                "Required assertions lack applicable current evidence",
+                evidence_status=AttributionEvidenceStatus.INSUFFICIENT,
+            )
         return tuple(evidence), results, state
 
     def run_step(self, task_id: str, *, confirmed: bool = False, strategy: str = "compact") -> dict[str, Any]:
@@ -456,6 +528,90 @@ class CoreOrchestrator:
             "evidence": evidence,
             "assertion_results": results,
             "state": state,
+        }
+
+    def run(
+        self,
+        task_id: str,
+        *,
+        confirmed: bool = False,
+        strategy: str = "compact",
+        max_iterations: int | None = None,
+    ) -> dict[str, Any]:
+        """Run bounded single-action transactions until the task blocks or terminates."""
+        contract = self._require_task(task_id)
+        remaining = max(0, contract.limits.max_steps - self._states[task_id].step)
+        limit = remaining if max_iterations is None else min(remaining, max_iterations)
+        if limit < 1:
+            raise ValueError("no execution iterations remain")
+        outcomes: list[dict[str, Any]] = []
+        repeated_without_progress = 0
+        previous_signature: object = None
+        active_strategy = strategy
+        for _ in range(limit):
+            before = set(self._states[task_id].completed_assertions)
+            outcome = self.run_step(task_id, confirmed=confirmed, strategy=active_strategy)
+            proposal = outcome["proposal"]
+            decision = outcome["decision"]
+            receipt = outcome.get("receipt")
+            state = outcome["state"]
+            outcomes.append(
+                {
+                    "proposal_ref": proposal.proposal_id,
+                    "decision_ref": self._decision_refs.get(proposal.proposal_id),
+                    "execution_ref": receipt.execution_id if receipt is not None else None,
+                    "task_status": state.status.value,
+                }
+            )
+            if decision.status == PolicyStatus.CONFIRM and not confirmed:
+                return {"status": "needs-confirmation", "iterations": tuple(outcomes)}
+            if decision.status not in {PolicyStatus.ALLOW, PolicyStatus.CONFIRM}:
+                return {"status": "refused", "iterations": tuple(outcomes)}
+            if receipt is None or receipt.status != ExecutionStatus.DELIVERED:
+                return {"status": "failed", "iterations": tuple(outcomes)}
+            if state.status == TaskStatus.COMPLETED:
+                return {"status": "completed", "iterations": tuple(outcomes)}
+            if state.status == TaskStatus.FAILED:
+                return {"status": "failed", "iterations": tuple(outcomes)}
+
+            signature = to_primitive(proposal.action)
+            progressed = bool(set(state.completed_assertions) - before)
+            if not progressed and signature == previous_signature:
+                repeated_without_progress += 1
+            else:
+                repeated_without_progress = 0
+            previous_signature = signature
+            if repeated_without_progress >= 1:
+                resetter = getattr(self.proposal_provider, "reset", None)
+                if callable(resetter):
+                    resetter(task_id)
+                self._record_attribution(
+                    task_id,
+                    AttributionEventKind.INCOMPLETE,
+                    AttributionStage.PLANNING,
+                    AttributionOwner.QWEN,
+                    "MODEL_PLANNING_INVALID",
+                    "The proposal provider repeated an action without verified progress",
+                    evidence_status=AttributionEvidenceStatus.INFERRED,
+                )
+                return {
+                    "status": "partial",
+                    "iterations": tuple(outcomes),
+                    "retry": {"retry": False, "required_action": "ask-controller"},
+                }
+            active_strategy = (
+                "recovery"
+                if state.status == TaskStatus.RETRY
+                else "verification-focused"
+                if state.status == TaskStatus.NEEDS_EVIDENCE
+                else strategy
+            )
+            if proposal.action.type == ActionType.DONE and state.status != TaskStatus.COMPLETED:
+                return {"status": "needs-evidence", "iterations": tuple(outcomes)}
+        return {
+            "status": "partial",
+            "iterations": tuple(outcomes),
+            "retry": {"retry": True, "required_action": "continue-run"},
         }
 
     def status(self, task_id: str) -> TaskState:
@@ -485,6 +641,10 @@ class CoreOrchestrator:
         self._latest_receipt.pop(task_id, None)
         self._latest_results.pop(task_id, None)
         self._verified_facts.pop(task_id, None)
+        self._primary_attribution.pop(task_id, None)
+        self._attribution_keys = {
+            item for item in self._attribution_keys if item[0] != task_id
+        }
         for proposal_id, owner in tuple(self._proposal_task.items()):
             if owner == task_id:
                 self._proposal_task.pop(proposal_id, None)
@@ -608,25 +768,44 @@ class CoreOrchestrator:
         self,
         task_id: str,
         event_kind: AttributionEventKind,
-        stage: str,
-        owner: str,
+        stage: AttributionStage | str,
+        owner: AttributionOwner | str,
         code: str,
         summary: str,
         *,
         evidence_refs: tuple[str, ...] = (),
+        evidence_status: AttributionEvidenceStatus = AttributionEvidenceStatus.CONFIRMED,
     ) -> Attribution:
+        stage = AttributionStage(stage)
+        owner = AttributionOwner(owner)
+        key = (task_id, event_kind.value, code)
+        if key in self._attribution_keys:
+            existing = next(
+                item
+                for item in reversed(self.attributions(task_id))
+                if item.event_kind == event_kind and item.code == code
+            )
+            return existing
+        is_primary = (
+            task_id not in self._primary_attribution
+            and event_kind in {AttributionEventKind.ERROR, AttributionEventKind.INCOMPLETE}
+            and evidence_status != AttributionEvidenceStatus.INSUFFICIENT
+        )
         attribution = Attribution(
             attribution_id=new_id("attribution"),
             event_kind=event_kind,
             stage=stage,
             owner=owner,
             code=code,
-            evidence_status=AttributionEvidenceStatus.CONFIRMED,
-            primary=False,
+            evidence_status=evidence_status,
+            primary=is_primary,
             summary=summary,
             evidence_refs=evidence_refs,
         )
         self.store.put(attribution, object_ref=attribution.attribution_id)
+        self._attribution_keys.add(key)
+        if is_primary:
+            self._primary_attribution[task_id] = attribution.attribution_id
         self._append_event(
             task_id,
             "attribution.recorded",
@@ -635,6 +814,19 @@ class CoreOrchestrator:
             caused_by=tuple(self._object_events[ref] for ref in evidence_refs if ref in self._object_events),
         )
         return attribution
+
+    def attributions(self, task_id: str) -> tuple[Attribution, ...]:
+        self._require_task(task_id)
+        return tuple(
+            self.store.require(event.object_ref)
+            for event in self.ledger.events(task_id)
+            if event.event_type == "attribution.recorded"
+        )
+
+    def primary_attribution(self, task_id: str) -> Attribution | None:
+        self._require_task(task_id)
+        ref = self._primary_attribution.get(task_id)
+        return self.store.require(ref) if ref else None
 
     def _append_event(self, task_id: str, event_type: str, epistemic_type: str, object_ref: str, **kwargs):
         event = self.ledger.append(task_id, event_type, epistemic_type, object_ref, **kwargs)
@@ -664,6 +856,7 @@ def response_envelope(
     error: dict[str, Any] | None = None,
     retry: dict[str, Any] | None = None,
     debug_ref: str | None = None,
+    attribution_refs: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     return {
         "protocol_version": 2,
@@ -673,4 +866,5 @@ def response_envelope(
         "error": error,
         "retry": retry,
         "debug_ref": debug_ref,
+        "attribution_refs": list(attribution_refs),
     }
