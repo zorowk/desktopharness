@@ -30,7 +30,8 @@ v2 事务内核和默认 Qwen + Treeland 路径已经实现；以下事项不应
    合成器的真实 adapter 与同等契约/桌面测试，才能证明通用性。
 3. **持久审计的真实环境验收**：设置 `GUI_AUDIT_DIR` 后，运行时将小型、结构化协议对象
    以及截图、原始树和模型输出等 artifact 写入私有 JSON 文件，并把 Ledger 追加到
-   `ledger.csv`；二进制以 Base64 JSON 封装。目录拒绝 group/other 可访问权限，默认保留
+   `ledger.csv`；二进制 artifact 以原始 `.bin` 文件保存于独立 `artifacts/` 目录，JSON
+   仅保存相对路径、长度和 SHA-256。目录拒绝 group/other 可访问权限，默认保留
    7 天、总计 16 GiB（以 `GUI_AUDIT_MAX_GIB` 调整），超出总容量时从最旧对象开始清理。仍需按部署路径验证权限、容量和
    保留策略；该审计副本用于重启后
    复核，不能恢复执行中的任务。
@@ -43,7 +44,10 @@ autoui-audit /private/path/audit
 
 TUI 支持任务列表 → 事件时间线 → 对象详情的逐层浏览；`↑↓` 选择、`Enter` 进入、`b`
 返回、`q` 退出。顶栏显示任务、事件和归档容量；对象详情页可展开 JSON，二进制 artifact
-可按 `e` 后输入的路径导出，并拒绝覆盖已有文件。
+可按 `e` 后输入的路径导出，并拒绝覆盖已有文件。启动时会显示只读归档扫描和因果链索引
+动画；任意按键可跳过。任务列表页按 `z` 可将 `ledger.csv` 与所有对象打包为 `.tar.gz`；
+将该文件复制到其他机器后，直接执行 `autoui-audit copied-audit.tar.gz` 即可在临时只读目录
+中打开同一份审计记录。
 4. **集中真实 Treeland 回归验收**：在上述实现完成后，按
    `manual-test-guide.md` 的基础事务、桌面适配器与 5×10 重复矩阵执行，产出可复核的
    成功率、拒绝率、延迟和 attribution 报告。当前单元测试不能替代此项。
