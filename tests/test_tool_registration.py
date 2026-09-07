@@ -94,7 +94,7 @@ class ToolRegistrationTests(unittest.TestCase):
         fake_pyautogui.hotkey = lambda *keys: calls.append(keys)
         fake_pyautogui.press = lambda key: calls.append((key,))
         with patch("mcp_autogui.mcp_autogui_main.QwenBackendClient", return_value=Backend()), patch(
-            "mcp_autogui.desktop_backend.find_capability",
+            "mcp_autogui.adapters.backends.treeland_deepin.find_capability",
             return_value={
                 "enabled": True,
                 "auto_invokable": True,
@@ -102,7 +102,7 @@ class ToolRegistrationTests(unittest.TestCase):
                 "capability_id": "desktop.launcher.toggle",
             },
         ), patch(
-            "mcp_autogui.mcp_autogui_main.get_treeland_layout_tree",
+            "mcp_autogui.adapters.backends.treeland_deepin.read_treeland_tree",
             return_value=desktop_tree(),
         ), patch.dict(os.environ, {"GUI_OMNIPARSER_ENABLED": "0"}, clear=False):
             mcp_autogui_main(mcp)

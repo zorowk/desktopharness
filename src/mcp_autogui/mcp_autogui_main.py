@@ -8,8 +8,6 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from functools import partial
-import json
-import subprocess
 from .qwen_backend import QwenBackendClient
 from .adapters.evidence import AtSpiEvidenceProvider, CompositorWindowEvidenceProvider, OmniParserEvidenceProvider
 from .adapters.proposal import QwenCUAProposalProvider
@@ -28,7 +26,6 @@ from .core.orchestrator import CoreOrchestrator
 from .core.audit import audit_components_from_config
 from .desktop_backend import DEFAULT_DESKTOP_BACKEND, create_desktop_backend
 from .facade import GuiRunFacade
-from .spatial_fusion import flatten_treeland_windows
 
 INPUT_IMAGE_SIZE = 960
 DEFAULT_APPLICATION_WAIT_TIMEOUT_S = 3.0
@@ -54,22 +51,10 @@ def _application_wait_timeout(value: float) -> float:
     return timeout
 
 
-def _active_window_summary(tree: dict[str, object]) -> dict[str, object] | None:
-    """Return a compact identity summary of the active Treeland window."""
-    for window in flatten_treeland_windows(tree):
-        if window.get("active") is True:
-            return {
-                "appId": window.get("appId"),
-                "title": window.get("title"),
-                "container": window.get("container"),
-                "workspace": window.get("workspace"),
-            }
-    return None
-
-
 def _capture_post_action_frame(
     capture_frame,
-    read_tree,
+    read_observation_state,
+    active_window_summary,
     expected_app_id: str,
     timeout_s: float,
 ) -> tuple[bytes | None, tuple[int, int] | None, dict | None, dict]:
@@ -84,13 +69,13 @@ def _capture_post_action_frame(
         while True:
             attempts += 1
             try:
-                observed_tree = read_tree()
+                observed_tree = read_observation_state()
                 poll_error = None
             except Exception as exc:
                 poll_error = f"{type(exc).__name__}: {exc}"
 
             active_window = (
-                _active_window_summary(observed_tree)
+                active_window_summary(observed_tree)
                 if observed_tree is not None
                 else None
             )
@@ -114,7 +99,7 @@ def _capture_post_action_frame(
 
     waited_ms = round((time.monotonic() - started) * 1000, 2)
     tree = latest_frame[2]
-    active_window = _active_window_summary(tree) if tree is not None else None
+    active_window = active_window_summary(tree) if tree is not None else None
     actual_app_id = (active_window or {}).get("appId")
     if not expected_app_id:
         status = "not-requested"
@@ -176,24 +161,6 @@ def _active_app_task_validation(
     }
 
 
-def get_treeland_layout_tree(timeout=35):
-    """Read Treeland's window tree from its built-in debug client."""
-    result = subprocess.run(
-        ["treeland-debug", "tree"],
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-    )
-    output = result.stdout.strip()
-    if not output:
-        raise RuntimeError("treeland-debug tree returned no window-tree data")
-    try:
-        return json.loads(output)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError("treeland-debug tree returned invalid JSON") from exc
-
-
 def _env_enabled(name: str, default: bool = False) -> bool:
     value = os.getenv(name)
     if value is None:
@@ -227,7 +194,6 @@ def mcp_autogui_main(
     store, ledger = audit_components_from_config(audit_config)
     desktop_backend = create_desktop_backend(
         desktop_backend_kind,
-        tree_reader=lambda: get_treeland_layout_tree(),
         artifact_store=store,
     )
     compositor = desktop_backend.compositor
@@ -376,7 +342,7 @@ def mcp_autogui_main(
         )
         observed = runtime.observe(task_id)
         raw_before = store.require(observed.raw_artifact_ref)
-        before = _active_window_summary(raw_before)
+        before = desktop_backend.active_window_summary(raw_before)
         proposal = ActionProposal(
             proposal_id=new_id("proposal"),
             source="desktop-shortcut",
@@ -400,7 +366,8 @@ def mcp_autogui_main(
             }
         _, _, post_tree, evidence = _capture_post_action_frame(
             capture_frame,
-            desktop_backend.read_raw_tree,
+            desktop_backend.read_observation_state,
+            desktop_backend.active_window_summary,
             "",
             0,
         )
@@ -410,7 +377,7 @@ def mcp_autogui_main(
             "executed_keys": keys,
             "evidence": {
                 "active_window_before": before,
-                "active_window_after": _active_window_summary(post_tree),
+                "active_window_after": desktop_backend.active_window_summary(post_tree),
                 "observation": evidence,
             },
         }
@@ -474,7 +441,7 @@ def mcp_autogui_main(
             )
         )
         observed = await run_blocking(runtime.observe, task_id)
-        active_before = _active_window_summary(store.require(observed.raw_artifact_ref))
+        active_before = desktop_backend.active_window_summary(store.require(observed.raw_artifact_ref))
         proposal = ActionProposal(
             proposal_id=new_id("proposal"),
             source="desktop-application-launch",
@@ -504,11 +471,12 @@ def mcp_autogui_main(
 
         _, _, post_tree, application_wait = _capture_post_action_frame(
             capture_frame,
-            desktop_backend.read_raw_tree,
+            desktop_backend.read_observation_state,
+            desktop_backend.active_window_summary,
             expected_app_id,
             timeout_s,
         )
-        active_after = _active_window_summary(post_tree)
+        active_after = desktop_backend.active_window_summary(post_tree)
         task_validation = _active_app_task_validation(
             expected_app_id,
             active_before,
