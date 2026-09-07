@@ -35,14 +35,14 @@ class HttpQwenBackendClient:
 
     def __init__(self, provider_config: Mapping[str, object] | None = None) -> None:
         configured = provider_config or {}
-        self.url = str(configured.get("base_url") or os.getenv("CUA_BACKEND_URL", "")).strip().rstrip("/")
+        self.url = str(configured.get("base_url", "") if provider_config is not None else os.getenv("CUA_BACKEND_URL", "")).strip().rstrip("/")
         self.api_key = os.getenv("CUA_BACKEND_API_KEY", "").strip()
-        self.agent_type = os.getenv("CUA_AGENT_TYPE", "cua").strip() or "cua"
-        self.rollout_nums = _env_int("CUA_ROLLOUT_NUMS", 1)
-        self.temperature = min(1.0, _env_float("CUA_TEMPERATURE", 0.1))
-        self.timeout = float(configured.get("timeout_seconds") or _env_float("CUA_BACKEND_TIMEOUT", 120.0, minimum=1.0))
-        self.verify_tls = bool(configured.get("tls_verify", _env_bool("CUA_TLS_VERIFY", True)))
-        self.trust_env = _env_bool("CUA_HTTP_TRUST_ENV", False)
+        self.agent_type = str(configured.get("agent_type", "cua") if provider_config is not None else os.getenv("CUA_AGENT_TYPE", "cua")).strip() or "cua"
+        self.rollout_nums = int(configured.get("rollout_nums", 1) if provider_config is not None else _env_int("CUA_ROLLOUT_NUMS", 1))
+        self.temperature = float(configured.get("temperature", 0.1) if provider_config is not None else min(1.0, _env_float("CUA_TEMPERATURE", 0.1)))
+        self.timeout = float(configured.get("timeout_seconds", 120) if provider_config is not None else _env_float("CUA_BACKEND_TIMEOUT", 120.0, minimum=1.0))
+        self.verify_tls = bool(configured.get("tls_verify", True) if provider_config is not None else _env_bool("CUA_TLS_VERIFY", True))
+        self.trust_env = bool(configured.get("trust_env", False) if provider_config is not None else _env_bool("CUA_HTTP_TRUST_ENV", False))
 
     def _require_url(self) -> None:
         if not self.url:

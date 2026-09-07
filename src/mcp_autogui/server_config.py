@@ -58,7 +58,11 @@ def load_server_config(path: str | Path) -> ServerConfig:
     proposal_provider = _object(raw, "proposal_provider")
     _only_keys(
         proposal_provider,
-        {"kind", "mode", "model", "base_url", "timeout_seconds", "tls_verify"},
+        {
+            "kind", "mode", "model", "base_url", "timeout_seconds", "tls_verify", "trust_env",
+            "agent_type", "rollout_nums", "temperature", "top_p", "max_tokens",
+            "max_response_chars", "max_history_turns", "coordinate_type", "resize_factor",
+        },
         "proposal_provider",
     )
     if _string(proposal_provider, "kind") != "qwen-cua":
@@ -69,6 +73,15 @@ def load_server_config(path: str | Path) -> ServerConfig:
     _optional_string(proposal_provider, "base_url")
     _optional_positive_int(proposal_provider, "timeout_seconds")
     _optional_bool(proposal_provider, "tls_verify")
+    _optional_bool(proposal_provider, "trust_env")
+    _optional_string(proposal_provider, "agent_type")
+    for name in ("rollout_nums", "max_tokens", "max_history_turns", "resize_factor"):
+        _optional_positive_int(proposal_provider, name)
+    _optional_minimum_int(proposal_provider, "max_response_chars", 1024)
+    _optional_unit_interval(proposal_provider, "temperature")
+    _optional_unit_interval(proposal_provider, "top_p")
+    if "coordinate_type" in proposal_provider and proposal_provider["coordinate_type"] not in {"relative", "absolute"}:
+        raise ValueError("proposal_provider.coordinate_type must be 'relative' or 'absolute'")
 
     evidence_providers = _object(raw, "evidence_providers", default={})
     audit = _object(raw, "audit", default={})
@@ -135,6 +148,22 @@ def _optional_positive_int(mapping: dict[str, Any], name: str) -> None:
     value = mapping[name]
     if not isinstance(value, int) or isinstance(value, bool) or value < 1:
         raise ValueError(f"{name} must be a positive integer")
+
+
+def _optional_minimum_int(mapping: dict[str, Any], name: str, minimum: int) -> None:
+    if name not in mapping:
+        return
+    value = mapping[name]
+    if not isinstance(value, int) or isinstance(value, bool) or value < minimum:
+        raise ValueError(f"{name} must be an integer of at least {minimum}")
+
+
+def _optional_unit_interval(mapping: dict[str, Any], name: str) -> None:
+    if name not in mapping:
+        return
+    value = mapping[name]
+    if not isinstance(value, (int, float)) or isinstance(value, bool) or not 0 <= value <= 1:
+        raise ValueError(f"{name} must be a number from 0 to 1")
 
 
 def _positive_int(mapping: dict[str, Any], name: str) -> int:

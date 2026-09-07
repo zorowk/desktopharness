@@ -69,26 +69,21 @@ class QwenCUAConfig:
 
     @classmethod
     def from_provider_config(cls, provider: Mapping[str, object]) -> "QwenCUAConfig":
-        """Build the configured v2 subset without mutating process settings.
-
-        Secrets and advanced tuning remain deployment settings; the JSON schema
-        deliberately owns only model selection and transport behaviour.
-        """
+        """Build a v2 configuration without reading legacy behaviour settings."""
         return cls(
-            model=str(provider.get("model") or "qwen3_rl").strip() or "qwen3_rl",
-            base_url=str(provider.get("base_url") or "").strip().rstrip("/"),
+            model=str(provider.get("model", "qwen3_rl")).strip() or "qwen3_rl",
+            base_url=str(provider.get("base_url", "")).strip().rstrip("/"),
             api_key=os.getenv("CUA_MODEL_API_KEY", "").strip(),
-            timeout=float(provider.get("timeout_seconds") or 120),
+            timeout=float(provider.get("timeout_seconds", 120)),
             verify_tls=bool(provider.get("tls_verify", True)),
-            trust_env=_env_bool("CUA_MODEL_TRUST_ENV", False),
-            max_tokens=_env_int("CUA_MAX_TOKENS", 1024),
-            max_response_chars=_env_int("CUA_MAX_RESPONSE_CHARS", 16384, 1024),
-            top_p=min(1.0, _env_float("CUA_TOP_P", 0.5)),
-            temperature=min(1.0, _env_float("CUA_TEMPERATURE", 0.1)),
-            max_history_turns=_env_int("CUA_MAX_HISTORY_TURNS", 4),
-            coordinate_type=os.getenv("CUA_COORDINATE_TYPE", "relative").strip()
-            or "relative",
-            resize_factor=_env_int("CUA_RESIZE_FACTOR", 32),
+            trust_env=bool(provider.get("trust_env", False)),
+            max_tokens=int(provider.get("max_tokens", 1024)),
+            max_response_chars=int(provider.get("max_response_chars", 16384)),
+            top_p=float(provider.get("top_p", 0.5)),
+            temperature=float(provider.get("temperature", 0.1)),
+            max_history_turns=int(provider.get("max_history_turns", 4)),
+            coordinate_type=str(provider.get("coordinate_type", "relative")),
+            resize_factor=int(provider.get("resize_factor", 32)),
         )
 
 

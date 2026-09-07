@@ -655,7 +655,9 @@ def mcp_autogui_main(
             str(omni_config.get("endpoint") or "").strip()
             if isinstance(omni_config, dict)
             else ""
-        ) or os.environ.get("OMNI_PARSER_SERVER", "").strip()
+        )
+        if evidence_provider_config is None:
+            endpoint = os.environ.get("OMNI_PARSER_SERVER", "").strip()
         if not endpoint:
             raise RuntimeError(
                 "OMNI_PARSER_SERVER is required when GUI_OMNIPARSER_ENABLED is enabled."

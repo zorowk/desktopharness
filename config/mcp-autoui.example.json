@@ -14,7 +14,17 @@
     "model": "qwen3_rl",
     "base_url": "http://127.0.0.1:8000/v1",
     "timeout_seconds": 120,
-    "tls_verify": true
+    "tls_verify": true,
+    "trust_env": false,
+    "agent_type": "cua",
+    "rollout_nums": 1,
+    "temperature": 0.1,
+    "top_p": 0.5,
+    "max_tokens": 1024,
+    "max_response_chars": 16384,
+    "max_history_turns": 4,
+    "coordinate_type": "relative",
+    "resize_factor": 32
   },
   "evidence_providers": {
     "compositor_window": {

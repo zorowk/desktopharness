@@ -299,7 +299,14 @@ class BackendSelectionTests(unittest.TestCase):
     def test_json_provider_configuration_overrides_legacy_model_environment(self):
         with patch.dict(
             os.environ,
-            {"CUA_BACKEND_MODE": "http", "CUA_MODEL": "legacy-model", "CUA_MODEL_BASE_URL": "http://legacy"},
+            {
+                "CUA_BACKEND_MODE": "http",
+                "CUA_MODEL": "legacy-model",
+                "CUA_MODEL_BASE_URL": "http://legacy",
+                "CUA_MODEL_TRUST_ENV": "1",
+                "CUA_MAX_TOKENS": "99",
+                "CUA_TEMPERATURE": "0.9",
+            },
             clear=False,
         ):
             backend = QwenBackendClient(
@@ -310,6 +317,9 @@ class BackendSelectionTests(unittest.TestCase):
                     "base_url": "http://configured/v1",
                     "timeout_seconds": 30,
                     "tls_verify": False,
+                    "trust_env": False,
+                    "max_tokens": 512,
+                    "temperature": 0.2,
                 }
             )
 
@@ -318,6 +328,9 @@ class BackendSelectionTests(unittest.TestCase):
         self.assertEqual(backend._delegate.config.base_url, "http://configured/v1")
         self.assertEqual(backend._delegate.config.timeout, 30)
         self.assertFalse(backend._delegate.config.verify_tls)
+        self.assertFalse(backend._delegate.config.trust_env)
+        self.assertEqual(backend._delegate.config.max_tokens, 512)
+        self.assertEqual(backend._delegate.config.temperature, 0.2)
 
     def test_embedded_is_default_and_does_not_require_backend_url(self):
         with patch.dict(os.environ, {}, clear=False):

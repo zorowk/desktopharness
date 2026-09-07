@@ -141,6 +141,16 @@ class ToolRegistrationTests(unittest.TestCase):
         self.assertEqual(response["status"], "ok")
         self.assertEqual(response["object"]["providers"]["evidence"], [])
 
+    def test_json_omniparser_configuration_does_not_fall_back_to_legacy_endpoint(self):
+        with patch("mcp_autogui.mcp_autogui_main.QwenBackendClient", return_value=Backend()), patch.dict(
+            os.environ, {"OMNI_PARSER_SERVER": "legacy.example:8000"}, clear=False
+        ):
+            with self.assertRaisesRegex(RuntimeError, "OMNI_PARSER_SERVER is required"):
+                mcp_autogui_main(
+                    self.compose(),
+                    evidence_provider_config={"omniparser": {"enabled": True, "endpoint": ""}},
+                )
+
 
 if __name__ == "__main__":
     unittest.main()
