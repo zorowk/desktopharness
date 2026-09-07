@@ -7,8 +7,10 @@ import time
 import threading
 import io
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from contextlib import redirect_stdout
+from functools import partial
 import base64
 import json
 import subprocess
@@ -605,8 +607,19 @@ def mcp_autogui_main(
 ):
     qwen_backend = QwenBackendClient(proposal_provider_config)
     backend_close = getattr(qwen_backend, "close", None)
-    if callable(backend_close):
-        atexit.register(backend_close)
+    worker_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="autoui-mcp")
+
+    def close_runtime() -> None:
+        worker_pool.shutdown(wait=True, cancel_futures=True)
+        if callable(backend_close):
+            backend_close()
+
+    atexit.register(close_runtime)
+
+    async def run_blocking(function, /, *args, **kwargs):
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(worker_pool, partial(function, *args, **kwargs))
+
     store, ledger = audit_components_from_config(audit_config)
     desktop_backend = create_desktop_backend(
         desktop_backend_kind,
@@ -690,7 +703,7 @@ def mcp_autogui_main(
         ``trace``。默认返回对象引用；传 ``diagnostic=true`` 或使用 ``trace``
         查看详细对象。
         """
-        return await asyncio.to_thread(
+        return await run_blocking(
             facade.handle,
             operation,
             task_id=task_id,
@@ -854,7 +867,7 @@ def mcp_autogui_main(
                 verification_profile="application-open",
             )
         )
-        observed = await asyncio.to_thread(runtime.observe, task_id)
+        observed = await run_blocking(runtime.observe, task_id)
         active_before = _active_window_summary(store.require(observed.raw_artifact_ref))
         proposal = ActionProposal(
             proposal_id=new_id("proposal"),
@@ -871,7 +884,7 @@ def mcp_autogui_main(
         decision = runtime.decide(proposal.proposal_id)
         if decision.status.value != "allow":
             raise PermissionError(f"policy refused application launch: {decision.reason_code}")
-        receipt = await asyncio.to_thread(runtime.execute, proposal.proposal_id)
+        receipt = await run_blocking(runtime.execute, proposal.proposal_id)
         result = launcher.result_for(proposal.proposal_id)
         if receipt.status.value != "delivered":
             return {
@@ -896,7 +909,7 @@ def mcp_autogui_main(
             active_after,
             application_wait,
         )
-        _, assertion_results, task_state = await asyncio.to_thread(runtime.evaluate, task_id)
+        _, assertion_results, task_state = await run_blocking(runtime.evaluate, task_id)
         return {
             "status": (
                 "success"
