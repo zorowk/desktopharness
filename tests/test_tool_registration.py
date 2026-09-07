@@ -94,7 +94,7 @@ class ToolRegistrationTests(unittest.TestCase):
         fake_pyautogui.hotkey = lambda *keys: calls.append(keys)
         fake_pyautogui.press = lambda key: calls.append((key,))
         with patch("mcp_autogui.mcp_autogui_main.QwenBackendClient", return_value=Backend()), patch(
-            "mcp_autogui.mcp_autogui_main.find_capability",
+            "mcp_autogui.desktop_backend.find_capability",
             return_value={
                 "enabled": True,
                 "auto_invokable": True,

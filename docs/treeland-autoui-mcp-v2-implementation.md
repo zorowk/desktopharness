@@ -18,6 +18,7 @@ JSON 文件。
 - `core/` 包含 canonical 协议对象、Action Gate、ProposalGuard、语义策略、Assertion Evaluator、确定性 Task State Reducer、append-only Ledger、Context Builder 和薄 Orchestrator；可选审计模式使用私有 JSON 对象目录、原始二进制 artifact 目录和 `ledger.csv` 持久化协议对象与事件。
 - `ports/` 定义 compositor、frame、proposal、policy、executor、application launcher、platform capability 和 evidence 契约。
 - `adapters/` 包含 Treeland 与严格 canonical-JSON compositor adapter、Qwen-CUA proposal adapter、PyAutoGUI frame/input adapter、Treeland/Deepin desktop capability adapter 和 compositor-window evidence provider。Treeland/Deepin desktop adapter 可选提供基于 `dde-am` 的应用启动能力。
+- `desktop_backend` 通过 registry 选择 desktop bundle；Treeland/Deepin bundle 提供 compositor、executor、frame provider、窗口手势、桌面能力目录、应用目录和 launcher。主装配只将这些 port 交给 Orchestrator。
 - `facade.py` 实现紧凑的 `gui_run` 操作和诊断对象查询。
 - `gui_run(operation="run")` 执行有界的自动闭环；每轮仍是一个独立的
   `observe -> propose -> decide -> execute -> evaluate` 事务，遇到确认、拒绝、
@@ -31,18 +32,12 @@ Core 不包含 Treeland、Deepin、Qwen、PyAutoGUI 或 `dde-am` 的 import 和�
 v2 事务内核和默认 Qwen + Treeland 路径已经实现；以下事项不应被表述为
 “v2 已完成”：
 
-1. **桌面后端完全解耦**：`desktop_backend.kind` 已通过 registry 选择 backend factory，
-   新 ID 可以注册而无需修改 selector；当前唯一内置实现仍是 `treeland-deepin`。
-   `mcp_autogui_main` 仍持有 Treeland 取树、PyAutoGUI 坐标映射和窗口手势等特定桌面装配
-   细节。应将每个后端重构为独立 bundle，至少提供 compositor、frame provider、executor、
-   可选 application launcher、platform capability/policy provider 及其桌面手势实现。主装配
-   只消费这些 port；新平台不能在主装配中增加平台分支。
-2. **配置语义与 typed-config 迁移**：当前 JSON 在构造组件前转换为进程环境变量，属于兼容
+1. **配置语义与 typed-config 迁移**：当前 JSON 在构造组件前转换为进程环境变量，属于兼容
    过渡层。应把已解析的 typed config 传入 backend 和 provider 构造函数，避免多实例、测试
    或重载时的全局环境串状态。配置 schema 必须拒绝未知字段和错误类型，并让每个开关真实
    生效；例如 `evidence_providers.compositor_window.enabled=false` 必须不注册该 provider，
    不能静默忽略。
-3. **OmniParser 完整迁移与旧代码删除**：OmniParser
+2. **OmniParser 完整迁移与旧代码删除**：OmniParser
    已迁移为默认关闭、只读的 `omniparser-grounding` provider：它只提供注册的
    `control.*`/`document.text` 概率性 EvidenceRecord，并将原始响应保存在 artifact
    引用中；不会注册 `omniparser_*` 直连执行工具。`document.text` 可直接用于断言；
@@ -51,14 +46,14 @@ v2 事务内核和默认 Qwen + Treeland 路径已经实现；以下事项不应
    不可达的旧直连执行实现，
    只保留 v2 Evidence Provider；随后设计稳定的 control subject/locator，而不能依赖调用方
    预先知道同帧临时 element ID。
-4. **独立业务证据**：当前 compositor-window provider 只能验证窗口级事实。除 OmniParser
+3. **独立业务证据（当前暂缓）**：当前 compositor-window provider 只能验证窗口级事实。除 OmniParser
    外，仍需接入并验证 AT-SPI、OCR、DOM 或应用 API 等具有适当独立性和可靠性的 provider，
    才能可靠判定控件状态、文本和业务结果。
-5. **跨合成器实证**：CanonicalJsonAdapter 已覆盖协议夹具；仍需至少一个非 Treeland
+4. **跨合成器实证（当前暂缓）**：CanonicalJsonAdapter 已覆盖协议夹具；仍需至少一个非 Treeland
    合成器的真实 adapter 与同等契约/桌面测试，才能证明通用性。应用装配通过显式
    backend registry 创建后端，JSON 的 `desktop_backend.kind` 只能选择已注册项；新增后端
    必须注册其 factory，不能让 Core 根据平台名分支。
-6. **持久审计的真实环境验收**：设置 `GUI_AUDIT_DIR` 后，运行时将小型、结构化协议对象
+5. **持久审计的真实环境验收**：设置 `GUI_AUDIT_DIR` 后，运行时将小型、结构化协议对象
    以及截图、原始树和模型输出等 artifact 写入私有 JSON 文件，并把 Ledger 追加到
    `ledger.csv`；二进制 artifact 以原始 `.bin` 文件保存于独立 `artifacts/` 目录，JSON
    仅保存相对路径、长度和 SHA-256。`reset` 只清运行态并追加 `task.reset`，不会删除
@@ -81,13 +76,14 @@ TUI 支持任务列表 → 事件时间线 → 对象详情的逐层浏览；`�
 中打开同一份审计记录。压缩包含 `manifest.json`，打开前会校验每个成员的大小和 SHA-256，
 可发现缺件或意外损坏；它不是签名或防篡改证据，存在对抗性威胁时必须在部署层增加签名或
 受控导出流程。
-7. **集中真实 Treeland 回归验收**：在上述实现完成后，按
+6. **集中真实 Treeland 回归验收**：在上述实现完成后，按
    `manual-test-guide.md` 的基础事务、桌面适配器与 5×10 重复矩阵执行，产出可复核的
    成功率、拒绝率、延迟和 attribution 报告。当前单元测试不能替代此项。
 
-实施顺序是先完成桌面后端解耦、typed-config、OmniParser 清理与 locator、独立 evidence、
-第二合成器和所需持久化，再进行集中真实 Treeland 验收。每项实现完成后仍必须运行相应
-单元和契约测试；集中验收用于验证这些能力在真实桌面中的联合作用。
+当前范围先完成 typed-config、OmniParser 清理与 locator 和所需持久化，
+再进行集中真实 Treeland 验收。独立 evidence 与第二合成器由用户暂缓，保留本节作为后续
+恢复实施时的边界。每项实现完成后仍必须运行相应单元和契约测试；集中验收用于验证这些
+能力在真实桌面中的联合作用。
 
 ## 事务不变量
 

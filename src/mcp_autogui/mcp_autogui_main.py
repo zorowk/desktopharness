@@ -19,8 +19,6 @@ import PIL
 import requests
 from .qwen_backend import QwenBackendClient
 from .adapters.evidence import CompositorWindowEvidenceProvider, OmniParserEvidenceProvider
-from .adapters.executor import PyAutoGUIExecutor
-from .adapters.frame import PyAutoGUIFrameProvider
 from .adapters.proposal import QwenCUAProposalProvider
 from .core.models import (
     Action,
@@ -37,12 +35,6 @@ from .core.orchestrator import CoreOrchestrator
 from .core.audit import audit_components_from_environment
 from .desktop_backend import DEFAULT_DESKTOP_BACKEND, create_desktop_backend
 from .facade import GuiRunFacade
-from .desktop_capabilities import (
-    find_capability,
-    load_desktop_application_catalogue,
-    load_keybinding_catalogue,
-    validate_application_id,
-)
 from .spatial_fusion import (
     actionable_treeland_windows,
     build_action_targets,
@@ -56,7 +48,6 @@ INPUT_IMAGE_SIZE = 960
 DEFAULT_APPLICATION_WAIT_TIMEOUT_S = 3.0
 MAX_APPLICATION_WAIT_TIMEOUT_S = 30.0
 APPLICATION_WAIT_POLL_INTERVAL_S = 0.2
-WINDOW_RESIZE_HANDLE_PX = 12.0
 
 
 def _expected_active_app_id(value: str) -> str:
@@ -267,118 +258,6 @@ def _active_window_summary(tree):
             }
     return None
 
-
-def _matching_windows_by_identity(tree, identity):
-    """Return all windows matching a non-unique controller identity."""
-    return [
-        window
-        for window in flatten_treeland_windows(tree)
-        if all(window.get(key) == value for key, value in identity.items())
-    ]
-
-
-def _point_in_window_titlebar(point, window):
-    """Whether a desktop point is in Treeland's titlebar rectangle.
-
-    Titlebar coordinates are relative to the toplevel window.  We require
-    explicit non-empty metadata: guessing a titlebar height risks treating an
-    editor tab as a safe drag source.
-    """
-    geometry = window.get("geometry") or {}
-    titlebar = window.get("titlebarGeometry") or {}
-    width = float(titlebar.get("width") or 0)
-    height = float(titlebar.get("height") or 0)
-    if width <= 0 or height <= 0:
-        return False
-    left = float(geometry.get("x") or 0) + float(titlebar.get("x") or 0)
-    top = float(geometry.get("y") or 0) + float(titlebar.get("y") or 0)
-    return left <= point["x"] < left + width and top <= point["y"] < top + height
-
-
-def _point_on_window_resize_handle(point, window):
-    """Return whether a point is on a toplevel's outer resize border."""
-    geometry = window.get("geometry") or {}
-    left = float(geometry.get("x") or 0)
-    top = float(geometry.get("y") or 0)
-    width = float(geometry.get("width") or 0)
-    height = float(geometry.get("height") or 0)
-    if width <= 0 or height <= 0:
-        return False
-    right = left + width
-    bottom = top + height
-    x, y = point["x"], point["y"]
-    within_handle_area = (
-        left - WINDOW_RESIZE_HANDLE_PX <= x <= right + WINDOW_RESIZE_HANDLE_PX
-        and top - WINDOW_RESIZE_HANDLE_PX <= y <= bottom + WINDOW_RESIZE_HANDLE_PX
-    )
-    return within_handle_area and (
-        abs(x - left) <= WINDOW_RESIZE_HANDLE_PX
-        or abs(x - right) <= WINDOW_RESIZE_HANDLE_PX
-        or abs(y - top) <= WINDOW_RESIZE_HANDLE_PX
-        or abs(y - bottom) <= WINDOW_RESIZE_HANDLE_PX
-    )
-
-
-def _window_manager_drag_to(action, pyautogui_module, screenshot_size):
-    """Safely interpret dragTo as a window move or edge resize.
-
-    A titlebar source uses WM move mode.  A source on an outer border keeps
-    the native dragTo down/move/up sequence, which the compositor interprets
-    as resize.  Content and tab-strip sources are rejected.
-    """
-    target = action.get("coordinate")
-    if not isinstance(target, dict):
-        raise ValueError("dragTo requires an absolute destination")
-    source_x, source_y = pyautogui_module.position()
-    tree = get_treeland_layout_tree()
-    bounds = desktop_bounds_from_treeland(tree)
-    source_desktop = screenshot_to_desktop_point(
-        {"x": float(source_x), "y": float(source_y)},
-        screenshot_size[0], screenshot_size[1], bounds,
-    )
-    active_windows = [
-        window for window in flatten_treeland_windows(tree) if window.get("active") is True
-    ]
-    if len(active_windows) != 1:
-        raise ValueError("drag_active_window_ambiguous")
-    window = active_windows[0]
-    identity = {
-        key: window.get(key)
-        for key in ("appId", "title", "container", "workspace")
-    }
-    matches = _matching_windows_by_identity(tree, identity)
-    if len(matches) != 1:
-        raise ValueError("drag_source_window_ambiguous")
-
-    destination_x = float(target["x"])
-    destination_y = float(target["y"])
-    screen_width, screen_height = pyautogui_module.size()
-    if not (0 <= destination_x < screen_width and 0 <= destination_y < screen_height):
-        raise ValueError("drag_destination_outside_screen")
-
-    before_geometry = deepcopy(window.get("geometry") or {})
-    if _point_in_window_titlebar(source_desktop, window):
-        kind = "wm_window_move"
-        pyautogui_module.hotkey("alt", "f7")
-        pyautogui_module.moveTo(destination_x, destination_y)
-        # In WM move mode this confirms the new anchor without delivering the
-        # click to an application tab or content area.
-        pyautogui_module.click(destination_x, destination_y)
-    elif _point_on_window_resize_handle(source_desktop, window):
-        kind = "native_window_resize"
-        pyautogui_module.dragTo(*action.get("args", []), **action.get("kwargs", {}))
-    else:
-        raise ValueError("drag_source_not_on_titlebar_or_resize_border")
-    return {
-        "kind": kind,
-        "source_window_identity": identity,
-        "source_geometry_before": before_geometry,
-        "source_screenshot_coordinate": {"x": float(source_x), "y": float(source_y)},
-        "destination_screenshot_coordinate": {
-            "x": destination_x,
-            "y": destination_y,
-        },
-    }
 
 def _env_enabled(name, default=False):
     value = os.getenv(name)
@@ -727,38 +606,9 @@ def mcp_autogui_main(mcp, *, desktop_backend_kind: str = DEFAULT_DESKTOP_BACKEND
         tree_reader=lambda: get_treeland_layout_tree(),
         cursor_reader=pyautogui.position,
         artifact_store=store,
-        capability_loader=lambda: load_keybinding_catalogue(),
-        capability_resolver=lambda capability_id: find_capability(capability_id),
+        input_module=pyautogui,
     )
     compositor = desktop_backend.compositor
-
-    def coordinate_mapper(point, coordinate_space, proposal):
-        if coordinate_space != "desktop-logical":
-            raise ValueError("unsupported executor coordinate space")
-        current = store.require(proposal.based_on_snapshot)
-        width, height = pyautogui.size()
-        bounds = current.coordinate_space.bounds
-        return Point(
-            (point.x - bounds.x) * float(width) / bounds.width,
-            (point.y - bounds.y) * float(height) / bounds.height,
-        )
-
-    def drag_handler(proposal, point):
-        width, height = pyautogui.size()
-        result = _window_manager_drag_to(
-            {
-                "coordinate": {"x": point.x, "y": point.y},
-                "args": [point.x, point.y],
-                "kwargs": {
-                    "duration": proposal.action.parameters.get("duration", 0.5),
-                    "button": proposal.action.parameters.get("button", "left"),
-                },
-            },
-            pyautogui,
-            (int(width), int(height)),
-        )
-        store.put(result, prefix="window-gesture")
-        return True
 
     evidence_providers = [CompositorWindowEvidenceProvider()]
     if _env_enabled("GUI_OMNIPARSER_ENABLED"):
@@ -780,14 +630,9 @@ def mcp_autogui_main(mcp, *, desktop_backend_kind: str = DEFAULT_DESKTOP_BACKEND
 
     runtime = CoreOrchestrator(
         compositor,
-        PyAutoGUIExecutor(
-            pyautogui,
-            coordinate_mapper=coordinate_mapper,
-            platform_resolver=desktop_backend.platform_resolver,
-            drag_handler=drag_handler,
-        ),
+        desktop_backend.executor,
         proposal_provider=QwenCUAProposalProvider(qwen_backend, store),
-        frame_provider=PyAutoGUIFrameProvider(pyautogui, store),
+        frame_provider=desktop_backend.frame_provider,
         application_launcher=desktop_backend.application_launcher,
         evidence_providers=tuple(evidence_providers),
         policy_providers=desktop_backend.policy_providers,
@@ -795,12 +640,7 @@ def mcp_autogui_main(mcp, *, desktop_backend_kind: str = DEFAULT_DESKTOP_BACKEND
         ledger=ledger,
     )
     facade = GuiRunFacade(runtime)
-    def capture_frame():
-        screenshot = pyautogui.screenshot().convert("RGB")
-        screenshot_buffer = io.BytesIO()
-        screenshot.save(screenshot_buffer, format="PNG")
-        tree = get_treeland_layout_tree()
-        return screenshot_buffer.getvalue(), screenshot.size, tree
+    capture_frame = desktop_backend.capture_observation
 
 
 
@@ -848,7 +688,7 @@ def mcp_autogui_main(mcp, *, desktop_backend_kind: str = DEFAULT_DESKTOP_BACKEND
         policy decision; it is deliberately narrower than ``enabled``.
         """
         requested_category = category.strip().lower()
-        items = load_keybinding_catalogue()
+        items = desktop_backend.list_capabilities()
         if requested_category:
             items = [
                 item for item in items
@@ -864,7 +704,7 @@ def mcp_autogui_main(mcp, *, desktop_backend_kind: str = DEFAULT_DESKTOP_BACKEND
         marked ``auto_invokable``.  This API never executes the schema's raw
         command/DBus trigger value.
         """
-        capability = find_capability(capability_id.strip())
+        capability = desktop_backend.find_capability(capability_id.strip())
         if capability is None:
             raise ValueError("unknown desktop capability_id")
         if not capability["enabled"]:
@@ -915,7 +755,7 @@ def mcp_autogui_main(mcp, *, desktop_backend_kind: str = DEFAULT_DESKTOP_BACKEND
             }
         _, _, post_tree, evidence = _capture_post_action_frame(
             capture_frame,
-            get_treeland_layout_tree,
+            desktop_backend.read_raw_tree,
             "",
             0,
         )
@@ -941,7 +781,7 @@ def mcp_autogui_main(mcp, *, desktop_backend_kind: str = DEFAULT_DESKTOP_BACKEND
         if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 100:
             raise ValueError("limit must be an integer between 1 and 100")
         needle = query.strip().casefold()
-        applications = load_desktop_application_catalogue()
+        applications = desktop_backend.list_applications()
         if needle:
             applications = [
                 item for item in applications
@@ -963,7 +803,7 @@ def mcp_autogui_main(mcp, *, desktop_backend_kind: str = DEFAULT_DESKTOP_BACKEND
         and arbitrary arguments are not part of this capability.  Supplying an
         expected Treeland app ID enables deterministic post-launch validation.
         """
-        resolved_app_id = validate_application_id(app_id)
+        resolved_app_id = desktop_backend.validate_application_id(app_id)
         expected_app_id = _expected_active_app_id(expected_active_app_id)
         timeout_s = _application_wait_timeout(application_wait_timeout_s)
         task_id = new_id("application-task")
@@ -1019,7 +859,7 @@ def mcp_autogui_main(mcp, *, desktop_backend_kind: str = DEFAULT_DESKTOP_BACKEND
 
         _, _, post_tree, application_wait = _capture_post_action_frame(
             capture_frame,
-            get_treeland_layout_tree,
+            desktop_backend.read_raw_tree,
             expected_app_id,
             timeout_s,
         )

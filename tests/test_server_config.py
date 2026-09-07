@@ -66,8 +66,16 @@ class ServerConfigTests(unittest.TestCase):
             return DesktopBackend(
                 backend_id=backend_id,
                 compositor=object(),
+                executor=object(),
+                frame_provider=object(),
+                read_raw_tree=lambda: {},
+                capture_observation=lambda: (b"", (0, 0), {}),
                 application_launcher=None,
                 policy_providers=(),
+                list_capabilities=lambda: [],
+                find_capability=lambda _identifier: None,
+                list_applications=lambda: [],
+                validate_application_id=lambda value: value,
             )
 
         register_desktop_backend(backend_id, factory)
@@ -78,6 +86,7 @@ class ServerConfigTests(unittest.TestCase):
             artifact_store=object(),
             capability_loader=lambda: [],
             capability_resolver=lambda _identifier: None,
+            input_module=object(),
         )
 
         self.assertEqual(backend.backend_id, backend_id)
