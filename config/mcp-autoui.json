@@ -20,6 +20,9 @@
     "compositor_window": {
       "enabled": true
     },
+    "atspi": {
+      "enabled": false
+    },
     "omniparser": {
       "enabled": false,
       "endpoint": ""

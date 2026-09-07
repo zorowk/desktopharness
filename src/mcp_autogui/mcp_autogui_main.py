@@ -20,7 +20,7 @@ from mcp.server.fastmcp import Image
 import PIL
 import requests
 from .qwen_backend import QwenBackendClient
-from .adapters.evidence import CompositorWindowEvidenceProvider, OmniParserEvidenceProvider
+from .adapters.evidence import AtSpiEvidenceProvider, CompositorWindowEvidenceProvider, OmniParserEvidenceProvider
 from .adapters.proposal import QwenCUAProposalProvider
 from .core.models import (
     Action,
@@ -638,6 +638,10 @@ def mcp_autogui_main(
         else True
     )
     evidence_providers = [CompositorWindowEvidenceProvider()] if compositor_enabled else []
+    atspi_config = configured_evidence.get("atspi", {})
+    atspi_enabled = bool(atspi_config.get("enabled", False)) if isinstance(atspi_config, dict) else False
+    if atspi_enabled and AtSpiEvidenceProvider.available():
+        evidence_providers.append(AtSpiEvidenceProvider())
     omni_config = configured_evidence.get("omniparser", {})
     omni_enabled = (
         bool(omni_config.get("enabled", False))
