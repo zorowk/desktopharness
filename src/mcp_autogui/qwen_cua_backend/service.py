@@ -6,7 +6,7 @@ import os
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Mapping
 
 from .agent import AgentPrediction, QwenCUAAgent
 
@@ -56,6 +56,30 @@ class QwenCUAConfig:
             api_key=os.getenv("CUA_MODEL_API_KEY", "").strip(),
             timeout=_env_float("CUA_MODEL_TIMEOUT", 120.0, 1.0),
             verify_tls=_env_bool("CUA_MODEL_TLS_VERIFY", True),
+            trust_env=_env_bool("CUA_MODEL_TRUST_ENV", False),
+            max_tokens=_env_int("CUA_MAX_TOKENS", 1024),
+            max_response_chars=_env_int("CUA_MAX_RESPONSE_CHARS", 16384, 1024),
+            top_p=min(1.0, _env_float("CUA_TOP_P", 0.5)),
+            temperature=min(1.0, _env_float("CUA_TEMPERATURE", 0.1)),
+            max_history_turns=_env_int("CUA_MAX_HISTORY_TURNS", 4),
+            coordinate_type=os.getenv("CUA_COORDINATE_TYPE", "relative").strip()
+            or "relative",
+            resize_factor=_env_int("CUA_RESIZE_FACTOR", 32),
+        )
+
+    @classmethod
+    def from_provider_config(cls, provider: Mapping[str, object]) -> "QwenCUAConfig":
+        """Build the configured v2 subset without mutating process settings.
+
+        Secrets and advanced tuning remain deployment settings; the JSON schema
+        deliberately owns only model selection and transport behaviour.
+        """
+        return cls(
+            model=str(provider.get("model") or "qwen3_rl").strip() or "qwen3_rl",
+            base_url=str(provider.get("base_url") or "").strip().rstrip("/"),
+            api_key=os.getenv("CUA_MODEL_API_KEY", "").strip(),
+            timeout=float(provider.get("timeout_seconds") or 120),
+            verify_tls=bool(provider.get("tls_verify", True)),
             trust_env=_env_bool("CUA_MODEL_TRUST_ENV", False),
             max_tokens=_env_int("CUA_MAX_TOKENS", 1024),
             max_response_chars=_env_int("CUA_MAX_RESPONSE_CHARS", 16384, 1024),

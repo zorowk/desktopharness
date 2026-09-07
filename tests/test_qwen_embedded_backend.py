@@ -296,6 +296,29 @@ class EmbeddedServiceTests(unittest.TestCase):
 
 
 class BackendSelectionTests(unittest.TestCase):
+    def test_json_provider_configuration_overrides_legacy_model_environment(self):
+        with patch.dict(
+            os.environ,
+            {"CUA_BACKEND_MODE": "http", "CUA_MODEL": "legacy-model", "CUA_MODEL_BASE_URL": "http://legacy"},
+            clear=False,
+        ):
+            backend = QwenBackendClient(
+                {
+                    "kind": "qwen-cua",
+                    "mode": "embedded",
+                    "model": "configured-model",
+                    "base_url": "http://configured/v1",
+                    "timeout_seconds": 30,
+                    "tls_verify": False,
+                }
+            )
+
+        self.assertEqual(backend.mode, "embedded")
+        self.assertEqual(backend._delegate.config.model, "configured-model")
+        self.assertEqual(backend._delegate.config.base_url, "http://configured/v1")
+        self.assertEqual(backend._delegate.config.timeout, 30)
+        self.assertFalse(backend._delegate.config.verify_tls)
+
     def test_embedded_is_default_and_does_not_require_backend_url(self):
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("CUA_BACKEND_MODE", None)

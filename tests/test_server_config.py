@@ -68,6 +68,11 @@ class ServerConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "audit has unknown fields"):
             load_server_config(self.write_config(payload))
 
+        payload = config_payload()
+        payload["proposal_provider"]["timeout_seconds"] = "120"
+        with self.assertRaisesRegex(ValueError, "timeout_seconds must be a positive integer"):
+            load_server_config(self.write_config(payload))
+
     def test_registered_backend_factory_is_selected_without_a_platform_branch(self):
         backend_id = "test-desktop-registry"
         captured = {}

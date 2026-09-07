@@ -66,6 +66,10 @@ def load_server_config(path: str | Path) -> ServerConfig:
         raise ValueError("proposal_provider.kind must be 'qwen-cua'")
     if _string(proposal_provider, "mode") not in {"embedded", "http"}:
         raise ValueError("proposal_provider.mode must be 'embedded' or 'http'")
+    _optional_string(proposal_provider, "model")
+    _optional_string(proposal_provider, "base_url")
+    _optional_positive_int(proposal_provider, "timeout_seconds")
+    _optional_bool(proposal_provider, "tls_verify")
 
     evidence_providers = _object(raw, "evidence_providers", default={})
     audit = _object(raw, "audit", default={})

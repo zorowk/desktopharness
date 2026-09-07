@@ -599,9 +599,10 @@ def mcp_autogui_main(
     mcp,
     *,
     desktop_backend_kind: str = DEFAULT_DESKTOP_BACKEND,
+    proposal_provider_config: dict[str, object] | None = None,
     evidence_provider_config: dict[str, object] | None = None,
 ):
-    qwen_backend = QwenBackendClient()
+    qwen_backend = QwenBackendClient(proposal_provider_config)
     backend_close = getattr(qwen_backend, "close", None)
     if callable(backend_close):
         atexit.register(backend_close)

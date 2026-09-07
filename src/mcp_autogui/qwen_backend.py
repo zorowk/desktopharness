@@ -4,7 +4,7 @@ import base64
 import json
 import os
 import struct
-from typing import Any
+from typing import Any, Mapping
 
 import requests
 
@@ -33,14 +33,15 @@ def _env_float(name: str, default: float, minimum: float = 0.0) -> float:
 class HttpQwenBackendClient:
     """Optional compatibility client for a separately deployed Qwen-CUA backend."""
 
-    def __init__(self) -> None:
-        self.url = os.getenv("CUA_BACKEND_URL", "").strip().rstrip("/")
+    def __init__(self, provider_config: Mapping[str, object] | None = None) -> None:
+        configured = provider_config or {}
+        self.url = str(configured.get("base_url") or os.getenv("CUA_BACKEND_URL", "")).strip().rstrip("/")
         self.api_key = os.getenv("CUA_BACKEND_API_KEY", "").strip()
         self.agent_type = os.getenv("CUA_AGENT_TYPE", "cua").strip() or "cua"
         self.rollout_nums = _env_int("CUA_ROLLOUT_NUMS", 1)
         self.temperature = min(1.0, _env_float("CUA_TEMPERATURE", 0.1))
-        self.timeout = _env_float("CUA_BACKEND_TIMEOUT", 120.0, minimum=1.0)
-        self.verify_tls = _env_bool("CUA_TLS_VERIFY", True)
+        self.timeout = float(configured.get("timeout_seconds") or _env_float("CUA_BACKEND_TIMEOUT", 120.0, minimum=1.0))
+        self.verify_tls = bool(configured.get("tls_verify", _env_bool("CUA_TLS_VERIFY", True)))
         self.trust_env = _env_bool("CUA_HTTP_TRUST_ENV", False)
 
     def _require_url(self) -> None:
@@ -184,14 +185,17 @@ class QwenBackendClient:
     repository or service.
     """
 
-    def __init__(self) -> None:
-        self.mode = os.getenv("CUA_BACKEND_MODE", "embedded").strip().lower() or "embedded"
+    def __init__(self, provider_config: Mapping[str, object] | None = None) -> None:
+        configured = provider_config or {}
+        self.mode = str(configured.get("mode") or os.getenv("CUA_BACKEND_MODE", "embedded")).strip().lower() or "embedded"
         if self.mode == "embedded":
             from .qwen_cua_backend import QwenCUAService
+            from .qwen_cua_backend.service import QwenCUAConfig
 
-            self._delegate: Any = QwenCUAService()
+            config = QwenCUAConfig.from_provider_config(configured) if provider_config is not None else None
+            self._delegate: Any = QwenCUAService(config)
         elif self.mode == "http":
-            self._delegate = HttpQwenBackendClient()
+            self._delegate = HttpQwenBackendClient(provider_config)
         else:
             raise ValueError("CUA_BACKEND_MODE must be 'embedded' or 'http'")
 
