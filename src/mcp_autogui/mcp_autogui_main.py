@@ -624,9 +624,7 @@ def mcp_autogui_main(
     desktop_backend = create_desktop_backend(
         desktop_backend_kind,
         tree_reader=lambda: get_treeland_layout_tree(),
-        cursor_reader=pyautogui.position,
         artifact_store=store,
-        input_module=pyautogui,
     )
     compositor = desktop_backend.compositor
 
@@ -664,10 +662,8 @@ def mcp_autogui_main(
             )
 
         def capture_omniparser_frame() -> bytes:
-            screenshot = pyautogui.screenshot().convert("RGB")
-            buffer = io.BytesIO()
-            screenshot.save(buffer, format="PNG")
-            return buffer.getvalue()
+            image, _, _ = desktop_backend.capture_observation()
+            return image
 
         evidence_providers.append(
             OmniParserEvidenceProvider(endpoint, capture_omniparser_frame, store)

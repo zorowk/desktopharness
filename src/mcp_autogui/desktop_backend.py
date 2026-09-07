@@ -194,13 +194,17 @@ def create_desktop_backend(
     backend_id: str,
     *,
     tree_reader: Callable[[], dict[str, Any]],
-    cursor_reader: Callable[[], Any],
     artifact_store: ObjectStore,
+    cursor_reader: Callable[[], Any] | None = None,
     capability_loader: Callable[[], list[dict[str, Any]]] | None = None,
     capability_resolver: Callable[[str], dict[str, Any] | None] | None = None,
-    input_module: Any,
+    input_module: Any | None = None,
 ) -> DesktopBackend:
     """Create one explicitly selected desktop backend from the registry."""
+    if input_module is None:
+        import pyautogui as input_module
+    if cursor_reader is None:
+        cursor_reader = input_module.position
     factory = _BACKEND_FACTORIES.get(backend_id)
     if factory is None:
         choices = ", ".join(available_desktop_backends())
