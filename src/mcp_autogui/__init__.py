@@ -1,9 +1,20 @@
 import argparse
+import logging
 import os
 import sys
 
 from .desktop_backend import DEFAULT_DESKTOP_BACKEND
 from .server_config import load_server_config
+
+
+def _configure_plain_server_logging() -> None:
+    """Use stable plain-text logs instead of FastMCP's Rich path renderer."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+        force=True,
+    )
 
 
 def main(argv: list[str] | None = None):
@@ -29,6 +40,7 @@ def main(argv: list[str] | None = None):
             evidence_provider_config=server_config.evidence_providers,
             audit_config=server_config.audit,
         )
+        _configure_plain_server_logging()
         mcp_main.run(server_config.transport_mode)
         return
 
@@ -43,11 +55,13 @@ def main(argv: list[str] | None = None):
             port=os.environ['SSE_PORT'] if 'SSE_PORT' in os.environ else 8000,
         )
         mcp_autogui_main(mcp_main, desktop_backend_kind=DEFAULT_DESKTOP_BACKEND)
+        _configure_plain_server_logging()
         mcp_main.run(transport)
         return
 
     mcp_main = FastMCP("treeland_autogui_mcp")
     mcp_autogui_main(mcp_main, desktop_backend_kind=DEFAULT_DESKTOP_BACKEND)
+    _configure_plain_server_logging()
     mcp_main.run()
 
 

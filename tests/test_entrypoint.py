@@ -7,10 +7,17 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from mcp_autogui import main
+from mcp_autogui import _configure_plain_server_logging, main
 
 
 class EntrypointTests(unittest.TestCase):
+    def test_server_logging_uses_a_plain_forced_formatter(self):
+        with patch("mcp_autogui.logging.basicConfig") as configure:
+            _configure_plain_server_logging()
+
+        self.assertEqual(configure.call_args.kwargs["format"], "%(asctime)s %(levelname)s %(name)s: %(message)s")
+        self.assertTrue(configure.call_args.kwargs["force"])
+
     def _run_server(self, transport):
         instances = []
 
