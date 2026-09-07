@@ -9,15 +9,18 @@
 `uv run treeland-autogui-mcp --config config/mcp-autoui.json`；配置覆盖 transport、
 Qwen-CUA proposal provider、Evidence Provider、审计策略和 `desktop_backend.kind`。
 JSON 是推荐入口，`CUA_*`、`GUI_*` 和 transport 环境变量仅保留给旧部署兼容。加载器目前
-在组件构造前将 JSON 规范化为旧组件读取的运行设置；组件构造函数的 typed-config 迁移仍是
-后续清理工作。敏感凭据（如模型 API key）仍应由受控 secret mechanism 提供，不应提交到
-JSON 文件。
+直接把已校验的配置传入 proposal provider、evidence provider、审计组件和 desktop bundle；
+JSON 模式不再以环境变量作为这些组件的配置桥接。环境变量只保留给敏感凭据、桌面会话
+（如 display/socket）及未使用 JSON 的旧部署。敏感凭据（如模型 API key）仍应由受控
+secret mechanism 提供，不应提交到 JSON 文件。
 
 ## 已实现边界
 
 - `core/` 包含 canonical 协议对象、Action Gate、ProposalGuard、语义策略、Assertion Evaluator、确定性 Task State Reducer、append-only Ledger、Context Builder 和薄 Orchestrator；可选审计模式使用私有 JSON 对象目录、原始二进制 artifact 目录和 `ledger.csv` 持久化协议对象与事件。
 - `ports/` 定义 compositor、frame、proposal、policy、executor、application launcher、platform capability 和 evidence 契约。
-- `adapters/` 包含 Treeland 与严格 canonical-JSON compositor adapter、Qwen-CUA proposal adapter、PyAutoGUI frame/input adapter、Treeland/Deepin desktop capability adapter 和 compositor-window evidence provider。Treeland/Deepin desktop adapter 可选提供基于 `dde-am` 的应用启动能力。
+- `adapters/` 包含 Treeland 与严格 canonical-JSON compositor adapter、Qwen-CUA proposal adapter、PyAutoGUI frame/input adapter、Treeland/Deepin desktop capability adapter，以及 compositor-window、AT-SPI 和 OmniParser evidence provider。Treeland/Deepin desktop adapter 可选提供基于 `dde-am` 的应用启动能力。
+- OmniParser 默认关闭；启用后仅作为只读 `omniparser-grounding` provider。它把截图解析为概率性 `control.*`/`document.text` EvidenceRecord，并以名称/角色的语义 locator 唯一匹配控件；原始响应保存在 artifact 引用中。它不注册 `omniparser_*` 工具，也不执行输入或把视觉 bbox 推断为 Treeland 窗口内的可操作目标。
+- AT-SPI 默认关闭；启用且会话可用时以同一语义 locator 提供独立的可访问性控件 evidence。provider 不可用时只产生缺失证据，不会伪造否定结论。
 - `desktop_backend` 通过 registry 选择 desktop bundle；Treeland/Deepin bundle 提供 compositor、executor、frame provider、窗口手势、桌面能力目录、应用目录和 launcher。主装配只将这些 port 交给 Orchestrator。
 - `facade.py` 实现紧凑的 `gui_run` 操作和诊断对象查询。
 - `gui_run(operation="run")` 执行有界的自动闭环；每轮仍是一个独立的
@@ -29,38 +32,24 @@ Core 不包含 Treeland、Deepin、Qwen、PyAutoGUI 或 `dde-am` 的 import 和�
 
 ## 尚未完成的实现与验收
 
-v2 事务内核和默认 Qwen + Treeland 路径已经实现；以下事项不应被表述为
-“v2 已完成”：
+v2 事务内核、默认 Qwen + Treeland 路径、配置直注入、AT-SPI 与 OmniParser 的只读迁移均已
+实现。以下是验收或由用户暂缓的后续范围，不应被表述为已经完成：
 
-1. **配置语义与 typed-config 迁移**：当前 JSON 在构造组件前转换为进程环境变量，属于兼容
-   过渡层。应把已解析的 typed config 传入 backend 和 provider 构造函数，避免多实例、测试
-   或重载时的全局环境串状态。配置 schema 必须拒绝未知字段和错误类型，并让每个开关真实
-   生效；例如 `evidence_providers.compositor_window.enabled=false` 必须不注册该 provider，
-   不能静默忽略。
-2. **OmniParser 完整迁移与旧代码删除**：OmniParser
-   已迁移为默认关闭、只读的 `omniparser-grounding` provider：它只提供注册的
-   `control.*`/`document.text` 概率性 EvidenceRecord，并将原始响应保存在 artifact
-   引用中；不会注册 `omniparser_*` 直连执行工具。`document.text` 可直接用于断言；
-   `control.*` 目前要求 task contract 已带有同帧的临时 `omniparser_element_id`，因此
-   不能作为通用的规划或策略 grounding。还必须删除 `register_omniparser_tools` 及其
-   不可达的旧直连执行实现，
-   只保留 v2 Evidence Provider；随后设计稳定的 control subject/locator，而不能依赖调用方
-   预先知道同帧临时 element ID。
-3. **独立业务证据（当前暂缓）**：当前 compositor-window provider 只能验证窗口级事实。除 OmniParser
-   外，仍需接入并验证 AT-SPI、OCR、DOM 或应用 API 等具有适当独立性和可靠性的 provider，
-   才能可靠判定控件状态、文本和业务结果。
-4. **跨合成器实证（当前暂缓）**：CanonicalJsonAdapter 已覆盖协议夹具；仍需至少一个非 Treeland
+1. **独立业务证据的真实环境验收**：AT-SPI 和 OmniParser provider 已实现；仍需在真实桌面
+   测量其控件/文本 evidence 的准确性、歧义处理、延迟与归因。DOM、应用 API 等更强的业务
+   evidence 仅在目标应用需要时新增，不应把它们混入 compositor-window provider。
+2. **跨合成器实证（当前暂缓）**：CanonicalJsonAdapter 已覆盖协议夹具；仍需至少一个非 Treeland
    合成器的真实 adapter 与同等契约/桌面测试，才能证明通用性。应用装配通过显式
    backend registry 创建后端，JSON 的 `desktop_backend.kind` 只能选择已注册项；新增后端
    必须注册其 factory，不能让 Core 根据平台名分支。
-5. **持久审计的真实环境验收**：设置 `GUI_AUDIT_DIR` 后，运行时将小型、结构化协议对象
+3. **持久审计的真实环境验收**：设置 JSON `audit.directory` 后，运行时将小型、结构化协议对象
    以及截图、原始树和模型输出等 artifact 写入私有 JSON 文件，并把 Ledger 追加到
    `ledger.csv`；二进制 artifact 以原始 `.bin` 文件保存于独立 `artifacts/` 目录，JSON
    仅保存相对路径、长度和 SHA-256。`reset` 只清运行态并追加 `task.reset`，不会删除
    既有 Ledger。保留期和容量清理以一个 JSON 对象及其全部 artifact 为原子单元；无法
    JSON 化的值保存说明性 stub，而不会无记录消失。目录拒绝 group/other 可访问权限，默认
-   保留 7 天、总计 16 GiB（以 `GUI_AUDIT_MAX_GIB` 调整）。仍需按部署路径验证权限、容量和
-   保留策略；该审计副本用于重启后复核，不能恢复执行中的任务。
+   保留 7 天、总计 16 GiB（由 `audit.retention_days` 与 `audit.max_gib` 配置）。仍需按部署
+   路径验证权限、容量和保留策略；该审计副本用于重启后复核，不能恢复执行中的任务。
 
 启用审计后，可用与合成器无关的 `autoui-audit` 浏览存档。直接传目录会进入终端 TUI：
 
@@ -76,14 +65,13 @@ TUI 支持任务列表 → 事件时间线 → 对象详情的逐层浏览；`�
 中打开同一份审计记录。压缩包含 `manifest.json`，打开前会校验每个成员的大小和 SHA-256，
 可发现缺件或意外损坏；它不是签名或防篡改证据，存在对抗性威胁时必须在部署层增加签名或
 受控导出流程。
-6. **集中真实 Treeland 回归验收**：在上述实现完成后，按
+4. **集中真实 Treeland 回归验收**：按
    `manual-test-guide.md` 的基础事务、桌面适配器与 5×10 重复矩阵执行，产出可复核的
    成功率、拒绝率、延迟和 attribution 报告。当前单元测试不能替代此项。
 
-当前范围先完成 typed-config、OmniParser 清理与 locator 和所需持久化，
-再进行集中真实 Treeland 验收。独立 evidence 与第二合成器由用户暂缓，保留本节作为后续
-恢复实施时的边界。每项实现完成后仍必须运行相应单元和契约测试；集中验收用于验证这些
-能力在真实桌面中的联合作用。
+当前阶段进入集中真实 Treeland 验收。独立业务 evidence 的真实环境质量验证与第二合成器
+由用户暂缓，保留本节作为后续恢复实施时的边界。每项实现完成后仍必须运行相应单元和契约
+测试；集中验收用于验证这些能力在真实桌面中的联合作用。
 
 ## 事务不变量
 
