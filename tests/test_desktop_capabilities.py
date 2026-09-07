@@ -5,6 +5,7 @@ from pathlib import Path
 
 from mcp_autogui.desktop_capabilities import (
     find_capability,
+    load_desktop_application_catalogue,
     load_keybinding_catalogue,
     validate_application_id,
 )
@@ -58,6 +59,19 @@ class DesktopCapabilitiesTests(unittest.TestCase):
         for invalid in ("/usr/bin/editor", "dde-am -c id", "https://example.test", "--help"):
             with self.assertRaises(ValueError):
                 validate_application_id(invalid)
+
+    def test_application_catalogue_tolerates_duplicate_desktop_entry_fields(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "example.desktop").write_text(
+                "[Desktop Entry]\nName=Example\nName=Example Updated\n",
+                encoding="utf-8",
+            )
+
+            applications = load_desktop_application_catalogue((root,))
+
+        self.assertEqual(applications[0]["app_id"], "example")
+        self.assertEqual(applications[0]["display_name"], "Example Updated")
 
     def test_unknown_capability_is_not_found(self):
         with tempfile.TemporaryDirectory() as directory:

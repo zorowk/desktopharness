@@ -14,6 +14,7 @@ fake_pyautogui.size = lambda: (1000, 800)
 fake_pyautogui.screenshot = lambda: PILImage.new("RGB", (1000, 800), "white")
 sys.modules["pyautogui"] = fake_pyautogui
 
+from mcp_autogui.core.models import ExecutionReceipt, ExecutionStatus, new_id, utc_now
 from mcp_autogui.mcp_autogui_main import mcp_autogui_main
 
 
@@ -40,6 +41,27 @@ class Backend:
 
     def close(self):
         return None
+
+
+class ApplicationLauncher:
+    launcher_id = "fake-launcher"
+
+    def __init__(self):
+        self.proposals = []
+
+    def launch(self, proposal):
+        self.proposals.append(proposal)
+        return ExecutionReceipt(
+            execution_id=new_id("execution"),
+            proposal_id=proposal.proposal_id,
+            status=ExecutionStatus.DELIVERED,
+            executed_action=proposal.action,
+            started_at=utc_now(),
+            finished_at=utc_now(),
+        )
+
+    def result_for(self, _proposal_id):
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
 
 def desktop_tree(app_id="desktop"):
@@ -112,6 +134,27 @@ class ToolRegistrationTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "success")
         self.assertEqual(calls, [("win",)])
+
+    def test_application_launch_returns_receipt_and_compositor_evidence(self):
+        mcp = self.compose()
+        launcher = ApplicationLauncher()
+        with patch("mcp_autogui.mcp_autogui_main.QwenBackendClient", return_value=Backend()), patch(
+            "mcp_autogui.adapters.backends.treeland_deepin.DdeApplicationLauncher",
+            return_value=launcher,
+        ), patch(
+            "mcp_autogui.adapters.backends.treeland_deepin.read_treeland_tree",
+            return_value=desktop_tree("dde-file-manager"),
+        ), patch.dict(os.environ, {"GUI_OMNIPARSER_ENABLED": "0"}, clear=False):
+            mcp_autogui_main(mcp)
+            result = asyncio.run(
+                mcp.functions["desktop_application_launch"](
+                    "dde-computer", expected_active_app_id="dde-file-manager"
+                )
+            )
+
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["returncode"], 0)
+        self.assertEqual(launcher.proposals[0].action.parameters["app_id"], "dde-computer")
 
     def test_omniparser_enablement_registers_no_legacy_execution_tools(self):
         mcp = self.compose()

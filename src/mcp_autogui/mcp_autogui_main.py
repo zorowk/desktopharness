@@ -458,7 +458,9 @@ def mcp_autogui_main(
         if decision.status.value != "allow":
             raise PermissionError(f"policy refused application launch: {decision.reason_code}")
         receipt = await run_blocking(runtime.execute, proposal.proposal_id)
-        result = launcher.result_for(proposal.proposal_id)
+        launcher = desktop_backend.application_launcher
+        result_for = getattr(launcher, "result_for", None)
+        result = result_for(proposal.proposal_id) if callable(result_for) else None
         if receipt.status.value != "delivered":
             return {
                 "status": "failed",

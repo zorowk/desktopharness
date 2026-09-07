@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import re
-from configparser import ConfigParser
+from configparser import ConfigParser, Error as ConfigParserError
 from pathlib import Path
 
 
@@ -172,7 +172,7 @@ def load_desktop_application_catalogue(
         if not root.is_dir():
             continue
         for path in sorted(root.rglob("*.desktop")):
-            parser = ConfigParser(interpolation=None)
+            parser = ConfigParser(interpolation=None, strict=False)
             try:
                 parser.read(path, encoding="utf-8")
                 entry = parser["Desktop Entry"]
@@ -190,6 +190,6 @@ def load_desktop_application_catalogue(
                         "launch_method": "dde-am",
                     }
                 )
-            except (OSError, KeyError, ValueError):
+            except (OSError, KeyError, ValueError, ConfigParserError):
                 continue
     return applications
