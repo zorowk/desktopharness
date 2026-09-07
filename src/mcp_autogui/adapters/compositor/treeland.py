@@ -36,17 +36,17 @@ from ...spatial_fusion import desktop_bounds_from_treeland, flatten_treeland_win
 
 def read_treeland_tree(timeout: float = 35) -> dict[str, Any]:
     result = subprocess.run(
-        ["treeland-debug", "--tree"], check=True, capture_output=True, text=True, timeout=timeout
+        ["treeland-debug", "tree"], check=True, capture_output=True, text=True, timeout=timeout
     )
     output = result.stdout.strip()
     if not output:
-        raise RuntimeError("treeland-debug --tree returned no window-tree data")
+        raise RuntimeError("treeland-debug tree returned no window-tree data")
     try:
         value = json.loads(output)
     except json.JSONDecodeError as exc:
-        raise RuntimeError("treeland-debug --tree returned invalid JSON") from exc
+        raise RuntimeError("treeland-debug tree returned invalid JSON") from exc
     if not isinstance(value, dict):
-        raise RuntimeError("treeland-debug --tree returned a non-object tree")
+        raise RuntimeError("treeland-debug tree returned a non-object tree")
     return value
 
 

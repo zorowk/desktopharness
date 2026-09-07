@@ -114,7 +114,7 @@ adapters/
 
 ### 2.2 CompositorAdapter：跨合成器的空间事实边界
 
-v2 不把 `treeland-debug --tree` 作为协议前提，而定义合成器适配器。最小可接入条件只有窗口树与光标位置；截图和输入注入可以由同一适配器或独立 provider 提供。
+v2 不把 `treeland-debug tree` 作为协议前提，而定义合成器适配器。最小可接入条件只有窗口树与光标位置；截图和输入注入可以由同一适配器或独立 provider 提供。
 
 ```text
 CompositorAdapter
@@ -213,7 +213,7 @@ occluded(window_id, region)
 
 仅有窗口树和光标位置时，系统仍能可靠完成坐标转换、窗口归属、顶层/遮挡判断、陈旧提案检测、窗口出现/消失和活动窗口验证；它不能据此断言窗口内部按钮、文本、桌面图标、输入焦点或业务结果。后者必须使用截图/Qwen、AT-SPI、DOM、OCR、剪贴板、文件系统或应用 API 的独立 evidence。
 
-Treeland 的实现是：`TreelandAdapter → CanonicalSnapshot`，其 transport 目前为 `treeland-debug --tree`。它的 `BackgroundContainer` 只是 `role=desktop` 的一个实现细节，不能进入跨合成器协议或被解释为“没有桌面图标”。
+Treeland 的实现是：`TreelandAdapter → CanonicalSnapshot`，其 transport 目前为 `treeland-debug tree`。它的 `BackgroundContainer` 只是 `role=desktop` 的一个实现细节，不能进入跨合成器协议或被解释为“没有桌面图标”。
 
 ### 2.3 平台能力目录：主控知道系统规则，Qwen 处理视觉剩余部分
 
@@ -1588,7 +1588,7 @@ propose → execute → verify
 
 - 定义 `AdapterDescriptor`、`CanonicalSnapshot` 和 `CanonicalWindowFact`；
 - 实现 `CompositorAdapter` port；
-- 用 `TreelandAdapter` 包装现有 `treeland-debug --tree`；
+- 用 `TreelandAdapter` 包装现有 `treeland-debug tree`；
 - 将现有空间融合改为只读取 CanonicalSnapshot；
 - 将 `z_index` 降为可选 best-effort，并声明 stacking model 与 hit-test/occlusion 能力；
 - 保存原始 Tree 为 `raw_artifact_ref`，停止向核心传播 Treeland 专有字段；

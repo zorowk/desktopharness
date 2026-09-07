@@ -21,6 +21,9 @@
 gui_run(operation="describe")
 ```
 
+真实 Treeland 测试前还应在同一桌面会话执行 `treeland-debug tree`。它必须输出非空 JSON；
+否则记录为环境阻塞，不进入任务成功率或模型失败率。
+
 通过标准：返回 `protocol_version=2`，列出当前 compositor、provider、可用
 actions 与 `run` 操作。若 capability 或 provider 缺失，记录为环境阻塞，不能
 记为模型或执行器失败。

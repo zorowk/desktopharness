@@ -4,7 +4,7 @@
 
 这是一个用于安全、可验证桌面自动化的 [MCP server](https://modelcontextprotocol.io/introduction)。当前实现以跨合成器的 AutoUI v2 事务内核为主；Treeland 是首个合成器适配器。
 
-在 Treeland 环境中，窗口树融合使用合成器提供的 `treeland-debug --tree` 命令；请确保运行 MCP 服务的环境中可从 `PATH` 找到 `treeland-debug`。
+在 Treeland 环境中，窗口树融合使用合成器提供的 `treeland-debug tree` 命令；请确保运行 MCP 服务的环境中可从 `PATH` 找到 `treeland-debug`。
 
 ## AutoUI v2 通用事务内核
 

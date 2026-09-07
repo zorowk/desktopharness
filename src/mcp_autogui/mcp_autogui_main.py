@@ -179,7 +179,7 @@ def _active_app_task_validation(
 def get_treeland_layout_tree(timeout=35):
     """Read Treeland's window tree from its built-in debug client."""
     result = subprocess.run(
-        ["treeland-debug", "--tree"],
+        ["treeland-debug", "tree"],
         check=True,
         capture_output=True,
         text=True,
@@ -187,11 +187,11 @@ def get_treeland_layout_tree(timeout=35):
     )
     output = result.stdout.strip()
     if not output:
-        raise RuntimeError("treeland-debug --tree returned no window-tree data")
+        raise RuntimeError("treeland-debug tree returned no window-tree data")
     try:
         return json.loads(output)
     except json.JSONDecodeError as exc:
-        raise RuntimeError("treeland-debug --tree returned invalid JSON") from exc
+        raise RuntimeError("treeland-debug tree returned invalid JSON") from exc
 
 
 def _env_enabled(name: str, default: bool = False) -> bool:
