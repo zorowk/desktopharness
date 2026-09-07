@@ -1,8 +1,11 @@
 import unittest
+from subprocess import CompletedProcess
+from unittest.mock import patch
 
 from mcp_autogui.adapters.compositor.treeland import (
     desktop_bounds_from_treeland,
     flatten_treeland_windows,
+    read_treeland_tree,
 )
 from mcp_autogui.coordinate_mapping import (
     desktop_to_screenshot_point,
@@ -26,6 +29,24 @@ class CoordinateMappingTests(unittest.TestCase):
         self.assertEqual(desktop_to_screenshot_point(desktop, 2000, 960, bounds), point)
 
 class TreelandTreeParserTests(unittest.TestCase):
+    def test_tree_reader_requests_machine_readable_json(self):
+        tree = {"layers": []}
+        with patch(
+            "mcp_autogui.adapters.compositor.treeland.subprocess.run",
+            return_value=CompletedProcess(
+                args=["treeland-debug", "--json", "tree"], returncode=0, stdout='{"layers": []}', stderr=""
+            ),
+        ) as run:
+            self.assertEqual(read_treeland_tree(), tree)
+
+        run.assert_called_once_with(
+            ["treeland-debug", "--json", "tree"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=35,
+        )
+
     def test_desktop_bounds_include_background_bounding_rect_and_dock(self):
         tree = {
             "layers": [

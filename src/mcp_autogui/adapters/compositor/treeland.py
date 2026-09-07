@@ -92,7 +92,11 @@ def _number(value: object) -> float:
 
 def read_treeland_tree(timeout: float = 35) -> dict[str, Any]:
     result = subprocess.run(
-        ["treeland-debug", "tree"], check=True, capture_output=True, text=True, timeout=timeout
+        ["treeland-debug", "--json", "tree"],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
     )
     output = result.stdout.strip()
     if not output:
