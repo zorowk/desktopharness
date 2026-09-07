@@ -1,10 +1,9 @@
-"""Server JSON configuration and compatibility wiring for legacy settings."""
+"""Server JSON configuration for the v2 MCP service."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 import json
-import os
 from pathlib import Path
 from typing import Any
 
@@ -97,33 +96,6 @@ def load_server_config(path: str | Path) -> ServerConfig:
     )
 
 
-def apply_server_config(config: ServerConfig) -> None:
-    """Apply JSON values before legacy components are constructed.
-
-    This is an internal transition bridge: callers configure JSON, while older
-    components continue to read the process settings until their constructors
-    accept typed configuration directly.
-    """
-    _set("MCP_TRANSPORT", config.transport_mode)
-    _set("SSE_HOST", config.transport_host)
-    _set("SSE_PORT", config.transport_port)
-
-    proposal = config.proposal_provider
-    _set("CUA_BACKEND_MODE", proposal["mode"])
-    _set_optional("CUA_MODEL", proposal.get("model"))
-    _set_optional("CUA_MODEL_BASE_URL", proposal.get("base_url"))
-    _set_optional("CUA_MODEL_TIMEOUT", proposal.get("timeout_seconds"))
-    _set_optional("CUA_MODEL_TLS_VERIFY", _bool_string(proposal.get("tls_verify")))
-
-    omni = _object(config.evidence_providers, "omniparser", default={})
-    _set("GUI_OMNIPARSER_ENABLED", _bool_string(omni.get("enabled", False)))
-    _set_optional("OMNI_PARSER_SERVER", omni.get("endpoint"))
-
-    _set_optional("GUI_AUDIT_DIR", config.audit.get("directory"))
-    _set_optional("GUI_AUDIT_RETENTION_DAYS", config.audit.get("retention_days"))
-    _set_optional("GUI_AUDIT_MAX_GIB", config.audit.get("max_gib"))
-
-
 def _object(mapping: dict[str, Any], name: str, *, default: dict[str, Any] | None = None) -> dict[str, Any]:
     value = mapping.get(name, default)
     if not isinstance(value, dict):
@@ -167,22 +139,3 @@ def _positive_int(mapping: dict[str, Any], name: str) -> int:
     if not isinstance(value, int) or isinstance(value, bool) or value < 1:
         raise ValueError(f"{name} must be a positive integer")
     return value
-
-
-def _bool_string(value: Any) -> str | None:
-    if value is None:
-        return None
-    if not isinstance(value, bool):
-        raise ValueError("configured boolean value must be true or false")
-    return "1" if value else "0"
-
-
-def _set(name: str, value: str | int) -> None:
-    os.environ[name] = str(value)
-
-
-def _set_optional(name: str, value: Any) -> None:
-    if value is None or value == "":
-        os.environ.pop(name, None)
-        return
-    _set(name, value)

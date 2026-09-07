@@ -90,7 +90,7 @@ class EntrypointTests(unittest.TestCase):
                     kwargs["audit_config"],
                 )
             )
-            with patch.dict(os.environ, {}, clear=True), patch.dict(
+            with patch.dict(os.environ, {"SSE_HOST": "legacy-host", "SSE_PORT": "9000"}, clear=True), patch.dict(
                 sys.modules,
                 {
                     "mcp.server.fastmcp": fastmcp_module,
@@ -103,7 +103,7 @@ class EntrypointTests(unittest.TestCase):
             selected_backends,
             [("treeland-deepin", {"kind": "qwen-cua", "mode": "embedded"}, {}, {})],
         )
-        self.assertEqual(instances[0].kwargs, {"host": "127.0.0.1", "port": "8651"})
+        self.assertEqual(instances[0].kwargs, {"host": "127.0.0.1", "port": 8651})
         self.assertEqual(instances[0].transport, "streamable-http")
 
 

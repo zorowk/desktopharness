@@ -3,7 +3,7 @@ import os
 import sys
 
 from .desktop_backend import DEFAULT_DESKTOP_BACKEND
-from .server_config import apply_server_config, load_server_config
+from .server_config import load_server_config
 
 
 def main(argv: list[str] | None = None):
@@ -15,7 +15,22 @@ def main(argv: list[str] | None = None):
     args = parser.parse_args([] if argv is None else argv)
     server_config = load_server_config(args.config) if args.config else None
     if server_config is not None:
-        apply_server_config(server_config)
+        from mcp.server.fastmcp import FastMCP
+        from .mcp_autogui_main import mcp_autogui_main
+
+        mcp_main = FastMCP("treeland_autogui_mcp",
+            host=server_config.transport_host,
+            port=server_config.transport_port,
+        )
+        mcp_autogui_main(
+            mcp_main,
+            desktop_backend_kind=server_config.desktop_backend,
+            proposal_provider_config=server_config.proposal_provider,
+            evidence_provider_config=server_config.evidence_providers,
+            audit_config=server_config.audit,
+        )
+        mcp_main.run(server_config.transport_mode)
+        return
 
     from mcp.server.fastmcp import FastMCP
     from .mcp_autogui_main import mcp_autogui_main
@@ -27,24 +42,13 @@ def main(argv: list[str] | None = None):
             host=os.environ['SSE_HOST'],
             port=os.environ['SSE_PORT'] if 'SSE_PORT' in os.environ else 8000,
         )
-        mcp_autogui_main(
-            mcp_main,
-            desktop_backend_kind=(server_config.desktop_backend if server_config else DEFAULT_DESKTOP_BACKEND),
-            proposal_provider_config=(server_config.proposal_provider if server_config else None),
-            evidence_provider_config=(server_config.evidence_providers if server_config else None),
-            audit_config=(server_config.audit if server_config else None),
-        )
+        mcp_autogui_main(mcp_main, desktop_backend_kind=DEFAULT_DESKTOP_BACKEND)
         mcp_main.run(transport)
-    else:
-        mcp_main = FastMCP("treeland_autogui_mcp")
-        mcp_autogui_main(
-            mcp_main,
-            desktop_backend_kind=(server_config.desktop_backend if server_config else DEFAULT_DESKTOP_BACKEND),
-            proposal_provider_config=(server_config.proposal_provider if server_config else None),
-            evidence_provider_config=(server_config.evidence_providers if server_config else None),
-            audit_config=(server_config.audit if server_config else None),
-        )
-        mcp_main.run()
+        return
+
+    mcp_main = FastMCP("treeland_autogui_mcp")
+    mcp_autogui_main(mcp_main, desktop_backend_kind=DEFAULT_DESKTOP_BACKEND)
+    mcp_main.run()
 
 
 def cli_main() -> None:

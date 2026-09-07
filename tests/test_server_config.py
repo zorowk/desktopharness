@@ -1,9 +1,7 @@
 import json
-import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
-from unittest.mock import patch
 
 from mcp_autogui.desktop_backend import (
     DesktopBackend,
@@ -11,7 +9,7 @@ from mcp_autogui.desktop_backend import (
     create_desktop_backend,
     register_desktop_backend,
 )
-from mcp_autogui.server_config import apply_server_config, load_server_config
+from mcp_autogui.server_config import load_server_config
 
 
 def config_payload(*, backend="treeland-deepin"):
@@ -45,13 +43,11 @@ class ServerConfigTests(unittest.TestCase):
 
         self.assertEqual(config.desktop_backend, "treeland-deepin")
         self.assertIn(config.desktop_backend, available_desktop_backends())
-        with patch.dict(os.environ, {}, clear=True):
-            apply_server_config(config)
-            self.assertEqual(os.environ["MCP_TRANSPORT"], "streamable-http")
-            self.assertEqual(os.environ["SSE_PORT"], "8651")
-            self.assertEqual(os.environ["CUA_MODEL"], "qwen3_rl")
-            self.assertEqual(os.environ["GUI_OMNIPARSER_ENABLED"], "0")
-            self.assertEqual(os.environ["GUI_AUDIT_RETENTION_DAYS"], "3")
+        self.assertEqual(config.transport_mode, "streamable-http")
+        self.assertEqual(config.transport_port, 8651)
+        self.assertEqual(config.proposal_provider["model"], "qwen3_rl")
+        self.assertFalse(config.evidence_providers["omniparser"]["enabled"])
+        self.assertEqual(config.audit["retention_days"], 3)
 
     def test_unknown_backend_is_rejected_before_server_start(self):
         with self.assertRaisesRegex(ValueError, "desktop_backend.kind"):
