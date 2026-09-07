@@ -1,6 +1,6 @@
 {
   "mcpServers": {
-    "treeland_autogui_mcp": {
+    "desktop_harness_mcp": {
       "command": "uv",
       "args": [
         "run",

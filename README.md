@@ -94,7 +94,7 @@ variables and secrets such as `CUA_MODEL_API_KEY`, but not runtime behaviour.
 Configure Codex with:
 
 ```bash
-codex mcp add treeland_autogui_mcp --url http://127.0.0.1:8651/mcp
+codex mcp add desktop_harness_mcp --url http://127.0.0.1:8651/mcp
 ```
 
 ## Installation

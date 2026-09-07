@@ -95,7 +95,7 @@ JSON 是推荐入口；`CUA_*`、`GUI_*` 和 transport 环境变量只保留给�
 使用默认 JSON 配置启动后，Codex 连接地址为：
 
 ```bash
-codex mcp add treeland_autogui_mcp --url http://127.0.0.1:8651/mcp
+codex mcp add desktop_harness_mcp --url http://127.0.0.1:8651/mcp
 ```
 
 `client_env.sh` 会准备 Treeland 桌面会话、清除旧运行时环境变量，并使用

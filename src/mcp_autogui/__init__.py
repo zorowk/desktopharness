@@ -29,7 +29,7 @@ def main(argv: list[str] | None = None):
         from mcp.server.fastmcp import FastMCP
         from .mcp_autogui_main import mcp_autogui_main
 
-        mcp_main = FastMCP("treeland_autogui_mcp",
+        mcp_main = FastMCP("desktop_harness_mcp",
             host=server_config.transport_host,
             port=server_config.transport_port,
         )
@@ -50,7 +50,7 @@ def main(argv: list[str] | None = None):
         transport = os.environ.get('MCP_TRANSPORT', 'sse')
         if transport not in {'sse', 'streamable-http'}:
             raise ValueError("MCP_TRANSPORT must be 'sse' or 'streamable-http'")
-        mcp_main = FastMCP("treeland_autogui_mcp",
+        mcp_main = FastMCP("desktop_harness_mcp",
             host=os.environ['SSE_HOST'],
             port=os.environ['SSE_PORT'] if 'SSE_PORT' in os.environ else 8000,
         )
@@ -59,7 +59,7 @@ def main(argv: list[str] | None = None):
         mcp_main.run(transport)
         return
 
-    mcp_main = FastMCP("treeland_autogui_mcp")
+    mcp_main = FastMCP("desktop_harness_mcp")
     mcp_autogui_main(mcp_main, desktop_backend_kind=DEFAULT_DESKTOP_BACKEND)
     _configure_plain_server_logging()
     mcp_main.run()
