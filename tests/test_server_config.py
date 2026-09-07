@@ -5,7 +5,12 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
-from mcp_autogui.desktop_backend import available_desktop_backends
+from mcp_autogui.desktop_backend import (
+    DesktopBackend,
+    available_desktop_backends,
+    create_desktop_backend,
+    register_desktop_backend,
+)
 from mcp_autogui.server_config import apply_server_config, load_server_config
 
 
@@ -51,3 +56,30 @@ class ServerConfigTests(unittest.TestCase):
     def test_unknown_backend_is_rejected_before_server_start(self):
         with self.assertRaisesRegex(ValueError, "desktop_backend.kind"):
             load_server_config(self.write_config(config_payload(backend="other-desktop")))
+
+    def test_registered_backend_factory_is_selected_without_a_platform_branch(self):
+        backend_id = "test-desktop-registry"
+        captured = {}
+
+        def factory(**kwargs):
+            captured.update(kwargs)
+            return DesktopBackend(
+                backend_id=backend_id,
+                compositor=object(),
+                application_launcher=None,
+                policy_providers=(),
+            )
+
+        register_desktop_backend(backend_id, factory)
+        backend = create_desktop_backend(
+            backend_id,
+            tree_reader=lambda: {},
+            cursor_reader=lambda: (0, 0),
+            artifact_store=object(),
+            capability_loader=lambda: [],
+            capability_resolver=lambda _identifier: None,
+        )
+
+        self.assertEqual(backend.backend_id, backend_id)
+        self.assertIn(backend_id, available_desktop_backends())
+        self.assertEqual(captured["tree_reader"](), {})
