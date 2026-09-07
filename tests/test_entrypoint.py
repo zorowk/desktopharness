@@ -83,7 +83,7 @@ class EntrypointTests(unittest.TestCase):
             fastmcp_module.FastMCP = FakeFastMCP
             main_module = types.ModuleType("mcp_autogui.mcp_autogui_main")
             main_module.mcp_autogui_main = lambda _mcp, **kwargs: selected_backends.append(
-                kwargs["desktop_backend_kind"]
+                (kwargs["desktop_backend_kind"], kwargs["evidence_provider_config"])
             )
             with patch.dict(os.environ, {}, clear=True), patch.dict(
                 sys.modules,
@@ -94,7 +94,10 @@ class EntrypointTests(unittest.TestCase):
             ):
                 main(["--config", str(path)])
 
-        self.assertEqual(selected_backends, ["treeland-deepin"])
+        self.assertEqual(
+            selected_backends,
+            [("treeland-deepin", {})],
+        )
         self.assertEqual(instances[0].kwargs, {"host": "127.0.0.1", "port": "8651"})
         self.assertEqual(instances[0].transport, "streamable-http")
 

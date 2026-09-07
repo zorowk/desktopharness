@@ -595,7 +595,12 @@ def register_omniparser_tools(mcp):
         await asyncio.sleep(time)
 
 
-def mcp_autogui_main(mcp, *, desktop_backend_kind: str = DEFAULT_DESKTOP_BACKEND):
+def mcp_autogui_main(
+    mcp,
+    *,
+    desktop_backend_kind: str = DEFAULT_DESKTOP_BACKEND,
+    evidence_provider_config: dict[str, object] | None = None,
+):
     qwen_backend = QwenBackendClient()
     backend_close = getattr(qwen_backend, "close", None)
     if callable(backend_close):
@@ -610,9 +615,28 @@ def mcp_autogui_main(mcp, *, desktop_backend_kind: str = DEFAULT_DESKTOP_BACKEND
     )
     compositor = desktop_backend.compositor
 
-    evidence_providers = [CompositorWindowEvidenceProvider()]
-    if _env_enabled("GUI_OMNIPARSER_ENABLED"):
-        endpoint = os.environ.get("OMNI_PARSER_SERVER", "").strip()
+    configured_evidence = evidence_provider_config or {}
+    compositor_config = configured_evidence.get("compositor_window", {})
+    compositor_enabled = (
+        bool(compositor_config.get("enabled", True))
+        if isinstance(compositor_config, dict)
+        else True
+    )
+    evidence_providers = [CompositorWindowEvidenceProvider()] if compositor_enabled else []
+    omni_config = configured_evidence.get("omniparser", {})
+    omni_enabled = (
+        bool(omni_config.get("enabled", False))
+        if isinstance(omni_config, dict)
+        else _env_enabled("GUI_OMNIPARSER_ENABLED")
+    )
+    if evidence_provider_config is None:
+        omni_enabled = _env_enabled("GUI_OMNIPARSER_ENABLED")
+    if omni_enabled:
+        endpoint = (
+            str(omni_config.get("endpoint") or "").strip()
+            if isinstance(omni_config, dict)
+            else ""
+        ) or os.environ.get("OMNI_PARSER_SERVER", "").strip()
         if not endpoint:
             raise RuntimeError(
                 "OMNI_PARSER_SERVER is required when GUI_OMNIPARSER_ENABLED is enabled."

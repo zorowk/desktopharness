@@ -129,6 +129,18 @@ class ToolRegistrationTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "direct execution tools are removed"):
             register_omniparser_tools(self.compose())
 
+    def test_json_evidence_configuration_can_disable_compositor_provider(self):
+        mcp = self.compose()
+        with patch("mcp_autogui.mcp_autogui_main.QwenBackendClient", return_value=Backend()):
+            mcp_autogui_main(
+                mcp,
+                evidence_provider_config={"compositor_window": {"enabled": False}},
+            )
+
+        response = asyncio.run(mcp.functions["gui_run"]("describe", diagnostic=True))
+        self.assertEqual(response["status"], "ok")
+        self.assertEqual(response["object"]["providers"]["evidence"], [])
+
 
 if __name__ == "__main__":
     unittest.main()

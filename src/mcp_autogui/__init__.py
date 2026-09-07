@@ -30,6 +30,7 @@ def main(argv: list[str] | None = None):
         mcp_autogui_main(
             mcp_main,
             desktop_backend_kind=(server_config.desktop_backend if server_config else DEFAULT_DESKTOP_BACKEND),
+            evidence_provider_config=(server_config.evidence_providers if server_config else None),
         )
         mcp_main.run(transport)
     else:
@@ -37,6 +38,7 @@ def main(argv: list[str] | None = None):
         mcp_autogui_main(
             mcp_main,
             desktop_backend_kind=(server_config.desktop_backend if server_config else DEFAULT_DESKTOP_BACKEND),
+            evidence_provider_config=(server_config.evidence_providers if server_config else None),
         )
         mcp_main.run()
 
