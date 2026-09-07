@@ -8,6 +8,7 @@
 - [v2 跨合成器设计](treeland-autoui-mcp-v2-design.md)：协议、不变量、组件边界和验收条件。
 - [v2 实现与扩展指南](treeland-autoui-mcp-v2-implementation.md)：已实现范围、扩展方式和当前 MCP 工具面。
 - [v2 手工验收与回归计划](manual-test-guide.md)：真实桌面测试前提、测试矩阵、记录格式和通过标准。
+- [v2 项目评分卡](PROJECT_SCORECARD.md)：固定的 release 评分维度、否决项、指标和当前基线评分。
 
 ## 在其他桌面/合成器上继续开发
 
