@@ -98,8 +98,9 @@ JSON 是推荐入口；`CUA_*`、`GUI_*` 和 transport 环境变量只保留给�
 codex mcp add treeland_autogui_mcp --url http://127.0.0.1:8651/mcp
 ```
 
-`client_env.sh` 和 `MCP_TRANSPORT` 仅用于旧环境变量部署；SSE 旧客户端地址取决于 JSON
-的 `transport.host` 与 `transport.port`，默认是 `http://127.0.0.1:8651/sse`。
+`client_env.sh` 会准备 Treeland 桌面会话、清除旧运行时环境变量，并使用
+`config/mcp-autoui.json` 启动服务。只有 `AUTOUI_MCP_CONFIG` 可用于覆盖配置文件路径；
+它保留桌面会话变量和 `CUA_MODEL_API_KEY` 等密钥，但不保留运行行为配置。
 
 ## 安装
 

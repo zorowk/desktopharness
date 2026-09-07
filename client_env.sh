@@ -263,20 +263,24 @@ else
     echo "ydotoold already running; skipping start." >&2
 fi
 
-# 启动treeland autogui mcp
-export SSE_HOST="0.0.0.0"
-export SSE_PORT=8000
-export MCP_TRANSPORT="${MCP_TRANSPORT:-streamable-http}"
-export CUA_BACKEND_MODE="${CUA_BACKEND_MODE:-embedded}"
-export CUA_MODEL_BASE_URL="${CUA_MODEL_BASE_URL:-http://127.0.0.1:8000/v1}"
-export CUA_MODEL="${CUA_MODEL:-qwen3_rl}"
-export CUA_MODEL_TLS_VERIFY="${CUA_MODEL_TLS_VERIFY:-1}"
-export GUI_OMNIPARSER_ENABLED="${GUI_OMNIPARSER_ENABLED:-0}"
-# Optional audit: private JSON objects/artifacts plus ledger.csv.
-export GUI_AUDIT_DIR="${GUI_AUDIT_DIR:-}"
-export GUI_AUDIT_RETENTION_DAYS="${GUI_AUDIT_RETENTION_DAYS:-7}"
-export GUI_AUDIT_MAX_GIB="${GUI_AUDIT_MAX_GIB:-16}"
-uv run treeland-autogui-mcp || exit $?
+# Start the v2 server only through its checked JSON configuration.  This script
+# prepares the desktop session; it must not overwrite transport, model,
+# evidence, or audit settings with the legacy environment-variable interface.
+MCP_CONFIG_PATH="${AUTOUI_MCP_CONFIG:-${PROJECT_ROOT}/config/mcp-autoui.json}"
+if [[ ! -f "${MCP_CONFIG_PATH}" ]]; then
+    echo "MCP JSON config does not exist: ${MCP_CONFIG_PATH}" >&2
+    exit 1
+fi
+
+# These are legacy runtime settings.  Keep only secrets (for example
+# CUA_MODEL_API_KEY from .env.local) and desktop-session variables in the
+# environment inherited by the JSON-configured server.
+unset SSE_HOST SSE_PORT MCP_TRANSPORT
+unset CUA_BACKEND_MODE CUA_MODEL_BASE_URL CUA_MODEL CUA_MODEL_TLS_VERIFY
+unset GUI_OMNIPARSER_ENABLED OMNI_PARSER_SERVER
+unset GUI_AUDIT_DIR GUI_AUDIT_RETENTION_DAYS GUI_AUDIT_MAX_GIB
+
+uv run treeland-autogui-mcp --config "${MCP_CONFIG_PATH}" || exit $?
 
 cat <<EOF
 

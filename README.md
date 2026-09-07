@@ -87,14 +87,15 @@ Start with the [documentation index](docs/README.md). Manual acceptance and repe
 
 ## Codex connection
 
-`client_env.sh` starts the server using Streamable HTTP. Configure Codex with:
+`client_env.sh` prepares the Treeland session, clears obsolete runtime
+environment settings, and starts the server with `config/mcp-autoui.json`.
+Override the configuration path only with `AUTOUI_MCP_CONFIG`; it keeps session
+variables and secrets such as `CUA_MODEL_API_KEY`, but not runtime behaviour.
+Configure Codex with:
 
 ```bash
-codex mcp add treeland_autogui_mcp --url http://127.0.0.1:8000/mcp
+codex mcp add treeland_autogui_mcp --url http://127.0.0.1:8651/mcp
 ```
-
-Set `MCP_TRANSPORT=sse` only for a legacy SSE client; its endpoint remains
-`http://127.0.0.1:8000/sse`.
 
 ## Installation
 
