@@ -589,7 +589,7 @@ class CoreOrchestrator:
                     task_id,
                     AttributionEventKind.INCOMPLETE,
                     AttributionStage.PLANNING,
-                    AttributionOwner.QWEN,
+                    AttributionOwner.MODEL,
                     "MODEL_PLANNING_INVALID",
                     "The proposal provider repeated an action without verified progress",
                     evidence_status=AttributionEvidenceStatus.INFERRED,

@@ -7,19 +7,14 @@ import hashlib
 import json
 import subprocess
 from collections.abc import Callable
-from threading import RLock
 from typing import Any
 
 from ...core.models import (
-    ActionProposal,
-    ActionType,
     AdapterCapabilities,
     AdapterDescriptor,
     CanonicalSnapshot,
     CanonicalWindowFact,
     CoordinateSpace,
-    ExecutionReceipt,
-    ExecutionStatus,
     OutputFact,
     Point,
     Rect,
@@ -30,8 +25,69 @@ from ...core.models import (
     utc_now,
 )
 from ...core.store import ObjectStore
-from ...desktop_capabilities import validate_application_id
-from ...spatial_fusion import desktop_bounds_from_treeland, flatten_treeland_windows
+
+
+def flatten_treeland_windows(tree: dict[str, Any]) -> list[dict[str, Any]]:
+    entries: list[tuple[float, float, dict[str, Any]]] = []
+    for layer in tree.get("layers", []):
+        for window in layer.get("windows", []):
+            _append_window(entries, window, layer.get("name", ""), layer.get("layer"))
+        for workspace in layer.get("workspaces", []):
+            if workspace.get("isActive") is True:
+                for window in workspace.get("windows", []):
+                    _append_window(entries, window, layer.get("name", ""), layer.get("layer"))
+    entries.sort(key=lambda entry: (entry[0], entry[1]), reverse=True)
+    return [window for _, _, window in entries]
+
+
+def desktop_bounds_from_treeland(tree: dict[str, Any]) -> dict[str, float]:
+    rects = [
+        window.get("geometry") or {}
+        for window in flatten_treeland_windows(tree)
+        if _has_area(window.get("geometry") or {})
+    ]
+    for layer in tree.get("layers", []):
+        if "background" not in str(layer.get("name") or "").lower():
+            continue
+        for window in layer.get("windows", []):
+            for key in ("boundingRect", "geometry"):
+                rect = window.get(key) or {}
+                if _has_area(rect):
+                    rects.append(rect)
+                    break
+    if not rects:
+        raise ValueError("Unable to determine desktop bounds from Treeland tree")
+    min_x = min(_number(rect.get("x")) for rect in rects)
+    min_y = min(_number(rect.get("y")) for rect in rects)
+    max_x = max(_number(rect.get("x")) + _number(rect.get("width")) for rect in rects)
+    max_y = max(_number(rect.get("y")) + _number(rect.get("height")) for rect in rects)
+    return {
+        "x": min_x,
+        "y": min_y,
+        "width": max_x - min_x,
+        "height": max_y - min_y,
+    }
+
+
+def _append_window(
+    entries: list[tuple[float, float, dict[str, Any]]],
+    window: dict[str, Any],
+    layer_name: object,
+    layer_value: object,
+) -> None:
+    geometry = window.get("geometry") or {}
+    if not _has_area(geometry) or ("workspace" in str(layer_name).lower() and window.get("visible") is not True):
+        return
+    window.setdefault("layer", layer_value)
+    entries.append((_number(window.get("layer", layer_value)), _number(window.get("z")), window))
+
+
+def _has_area(rect: dict[str, Any]) -> bool:
+    return _number(rect.get("width")) > 0 and _number(rect.get("height")) > 0
+
+
+def _number(value: object) -> float:
+    return 0.0 if value is None else float(value)
 
 
 def read_treeland_tree(timeout: float = 35) -> dict[str, Any]:
@@ -50,67 +106,17 @@ def read_treeland_tree(timeout: float = 35) -> dict[str, Any]:
     return value
 
 
-class DdeApplicationLauncher:
-    """Deepin session launcher supplied by the Treeland desktop backend."""
-
-    launcher_id = "dde-am"
-
-    def __init__(self, runner: Callable[..., object] = subprocess.run) -> None:
-        self._runner = runner
-        self._results: dict[str, object] = {}
-        self._lock = RLock()
-
-    def launch(self, proposal: ActionProposal) -> ExecutionReceipt:
-        started = utc_now()
-        status = ExecutionStatus.FAILED
-        error = None
-        try:
-            if proposal.action.type != ActionType.APPLICATION_LAUNCH:
-                raise ValueError("launcher received a non-launch proposal")
-            app_id = validate_application_id(str(proposal.action.parameters.get("app_id") or ""))
-            result = self._runner(
-                ["dde-am", app_id], capture_output=True, text=True, timeout=10, check=False
-            )
-            with self._lock:
-                self._results[proposal.proposal_id] = result
-                while len(self._results) > 100:
-                    self._results.pop(next(iter(self._results)))
-            if getattr(result, "returncode", 1) != 0:
-                error = "APPLICATION_LAUNCH_FAILED"
-            else:
-                status = ExecutionStatus.DELIVERED
-        except FileNotFoundError:
-            error = "CAPABILITY_UNAVAILABLE"
-        except Exception as exc:
-            error = f"APPLICATION_LAUNCH_{type(exc).__name__.upper()}"
-        return ExecutionReceipt(
-            execution_id=new_id("execution"),
-            proposal_id=proposal.proposal_id,
-            status=status,
-            executed_action=proposal.action if status == ExecutionStatus.DELIVERED else None,
-            started_at=started,
-            finished_at=utc_now(),
-            error_code=error,
-        )
-
-    def result_for(self, proposal_id: str) -> object | None:
-        with self._lock:
-            return self._results.get(proposal_id)
-
-
 class TreelandAdapter:
     def __init__(
         self,
         tree_reader: Callable[[], dict[str, Any]] = read_treeland_tree,
         cursor_reader: Callable[[], Any] | None = None,
         artifact_store: ObjectStore | None = None,
-        application_launcher: DdeApplicationLauncher | None = None,
     ) -> None:
         self._tree_reader = tree_reader
         self._cursor_reader = cursor_reader
         self._artifacts = artifact_store or ObjectStore()
         self._latest: CanonicalSnapshot | None = None
-        self._application_launcher = application_launcher or DdeApplicationLauncher()
 
     @property
     def descriptor(self) -> AdapterDescriptor:
@@ -135,11 +141,6 @@ class TreelandAdapter:
     @property
     def latest_snapshot(self) -> CanonicalSnapshot | None:
         return self._latest
-
-    @property
-    def application_launcher(self) -> DdeApplicationLauncher:
-        """Optional desktop-session capability exposed by this backend."""
-        return self._application_launcher
 
     def get_window_tree(self) -> object:
         return self._tree_reader()

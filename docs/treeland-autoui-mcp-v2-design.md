@@ -994,7 +994,7 @@ AssertionEvaluation:
   "attribution": {
     "event_kind": "error",
     "stage": "perception",
-    "owner": "qwen",
+    "owner": "model",
     "code": "MODEL_PERCEPTION_MISMATCH",
     "evidence_status": "confirmed",
     "primary": true,

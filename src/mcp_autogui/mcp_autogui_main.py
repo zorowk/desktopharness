@@ -413,7 +413,7 @@ def mcp_autogui_main(
 
         Only a plain application ID is accepted.  Paths, URIs, command mode,
         and arbitrary arguments are not part of this capability.  Supplying an
-        expected Treeland app ID enables deterministic post-launch validation.
+        expected application ID enables deterministic post-launch validation.
         """
         resolved_app_id = desktop_backend.validate_application_id(app_id)
         expected_app_id = _expected_active_app_id(expected_active_app_id)

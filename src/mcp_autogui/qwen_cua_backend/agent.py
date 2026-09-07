@@ -177,7 +177,7 @@ class QwenCUAAgent:
             )
         if accessibility_tree:
             prompt_parts.append(
-                "Treeland desktop context (advisory; the local validator is authoritative):\n"
+                "Desktop compositor context (advisory; the local validator is authoritative):\n"
                 + accessibility_tree[:12000]
             )
         messages.append(

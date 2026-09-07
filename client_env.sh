@@ -263,8 +263,8 @@ else
     echo "ydotoold already running; skipping start." >&2
 fi
 
-# Start the v2 server only through its checked JSON configuration.  This script
-# prepares the desktop session; it must not overwrite transport, model,
+# Start the v2 server only through its checked JSON configuration.  This is the
+# Treeland/Deepin default-backend environment script; it must not overwrite transport, model,
 # evidence, or audit settings with the legacy environment-variable interface.
 MCP_CONFIG_PATH="${AUTOUI_MCP_CONFIG:-${PROJECT_ROOT}/config/mcp-autoui.json}"
 if [[ ! -f "${MCP_CONFIG_PATH}" ]]; then

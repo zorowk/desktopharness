@@ -62,27 +62,27 @@
 
 ## 当前基线评分
 
-**评估对象：** `89e007c`（2026-09-07）  
-**证据：** 88 项 Python 单测通过；v2 实现与手工验收文档；当前代码静态依赖检查。  
+**评估对象：** 当前 v2 基线（2026-09-07）
+**证据：** 84 项 Python 单测通过；v2 实现与手工验收文档；当前代码静态依赖检查。
 **置信度：** 架构/单测维度中等至高；真实任务效果低。尚未完成真实 Treeland、AT-SPI、
 OmniParser、审计目录与第二 compositor 验收。
 
 | # | 维度 | 原始分 | 贡献分 | 依据与限制 |
 | --- | --- | ---: | ---: | --- |
 | 1 | 架构边界清晰度 | 9.0 | 9.0 | Ports、adapters、Core transaction 与 evidence/evaluator/reducer 分层明确；`CoreOrchestrator` 仍较大，需持续防止编排逻辑膨胀。 |
-| 2 | 核心独立性 | 9.5 | 9.5 | 未发现具体 adapter/输入/网络库依赖；但 `AttributionOwner.QWEN` 是具体模型名称归因标签，建议未来抽象为通用 model owner。 |
+| 2 | 核心独立性 | 10.0 | 10.0 | `core/` 与 `ports/` 不含具体 adapter、桌面、模型或输入实现标签；模型归因使用通用 `model` owner。 |
 | 3 | Canonical Model 质量 | 8.0 | 6.4 | 有最小窗口、坐标、capability 与 unknown 语义；尚无第二真实 compositor 来验证字段充分性与最小性。 |
 | 4 | 扩展性 | 8.0 | 6.4 | Backend registry、port 和 provider 机制已具备；尚未用第二真实 backend 或新增 provider 的改动比证明。 |
 | 5 | 状态与事实正确性 | 9.0 | 9.0 | 事务、Evidence、AssertionResult、Receipt 和 Reducer 已分离并有单测；真实 provider 冲突/过期场景仍待验收。 |
 | 6 | 安全与策略模型 | 8.5 | 8.5 | 权限、语义策略、确认与 Guard 存在且平台工具走 Proposal；尚无真实误允许/误拒绝统计。 |
-| 7 | 可验证性与可测试性 | 7.0 | 7.0 | 88 项单测与 canonical fixture 覆盖关键组件；未提供覆盖率、完整错误码矩阵、第二 compositor 和真实桌面回归。 |
+| 7 | 可验证性与可测试性 | 7.0 | 7.0 | 84 项单测与 canonical fixture 覆盖关键组件；未提供覆盖率、完整错误码矩阵、第二 compositor 和真实桌面回归。 |
 | 8 | 故障归因能力 | 8.0 | 6.4 | Ledger、stage/owner/code、证据状态与恢复动作已实现；尚未计算 Root Cause Resolution Rate。 |
 | 9 | Agent 鲁棒性 | 7.0 | 5.6 | stale/Guard/无进展等机制存在；真实窗口变化、provider 抖动和模型误识别下的恢复率未知。 |
 | 10 | 通信与上下文效率 | 8.0 | 4.8 | Context Builder 使用投影，原始树/截图/模型输出以 artifact 引用保存；尚无 tokens、payload、延迟实测。 |
 | 11 | 工程实现质量 | 7.0 | 4.9 | 依赖方向良好、工作区干净、回归通过；`core/orchestrator.py` 与 MCP composition root 仍偏大，应在后续重构中控制复杂度。 |
 | 12 | 实际任务效果 | 2.0 | 1.0 | 尚未执行真实 Treeland 任务矩阵；不能由单测推断成功率、成本、速度或 false completion。 |
 
-**总分：78.5 / 100（B）**
+**总分：79.0 / 100（B）**
 
 结论：当前是“**架构质量显著高于实证成熟度**”的状态。没有触发两个否决项：Core 不含
 具体运行时依赖，且状态/事实分离路径存在并受测试保护。但尚未取得真实桌面矩阵和质量指标，

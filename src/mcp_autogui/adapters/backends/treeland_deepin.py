@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import subprocess
+from threading import RLock
 from typing import Any
 
 from ..compositor import TreelandAdapter
@@ -10,7 +12,15 @@ from ..compositor.treeland import read_treeland_tree
 from ..executor import PyAutoGUIExecutor
 from ..frame import PyAutoGUIFrameProvider
 from ..platform import DeepinKeybindingProvider
-from ...core.models import ActionProposal, Point
+from ...core.models import (
+    ActionProposal,
+    ActionType,
+    ExecutionReceipt,
+    ExecutionStatus,
+    Point,
+    new_id,
+    utc_now,
+)
 from ...core.store import ObjectStore
 from ...desktop_backend import DesktopBackend
 from ...desktop_capabilities import (
@@ -19,11 +29,60 @@ from ...desktop_capabilities import (
     load_keybinding_catalogue,
     validate_application_id,
 )
-from ...spatial_fusion import desktop_bounds_from_treeland, flatten_treeland_windows, screenshot_to_desktop_point
+from ...coordinate_mapping import screenshot_to_desktop_point
+from ..compositor.treeland import desktop_bounds_from_treeland, flatten_treeland_windows
 
 
 BACKEND_ID = "treeland-deepin"
 WINDOW_RESIZE_HANDLE_PX = 12.0
+
+
+class DdeApplicationLauncher:
+    """Deepin application launcher owned by the Treeland/Deepin backend."""
+
+    launcher_id = "dde-am"
+
+    def __init__(self, runner: Callable[..., object] = subprocess.run) -> None:
+        self._runner = runner
+        self._results: dict[str, object] = {}
+        self._lock = RLock()
+
+    def launch(self, proposal: ActionProposal) -> ExecutionReceipt:
+        started = utc_now()
+        status = ExecutionStatus.FAILED
+        error = None
+        try:
+            if proposal.action.type != ActionType.APPLICATION_LAUNCH:
+                raise ValueError("launcher received a non-launch proposal")
+            app_id = validate_application_id(str(proposal.action.parameters.get("app_id") or ""))
+            result = self._runner(
+                ["dde-am", app_id], capture_output=True, text=True, timeout=10, check=False
+            )
+            with self._lock:
+                self._results[proposal.proposal_id] = result
+                while len(self._results) > 100:
+                    self._results.pop(next(iter(self._results)))
+            if getattr(result, "returncode", 1) != 0:
+                error = "APPLICATION_LAUNCH_FAILED"
+            else:
+                status = ExecutionStatus.DELIVERED
+        except FileNotFoundError:
+            error = "CAPABILITY_UNAVAILABLE"
+        except Exception as exc:
+            error = f"APPLICATION_LAUNCH_{type(exc).__name__.upper()}"
+        return ExecutionReceipt(
+            execution_id=new_id("execution"),
+            proposal_id=proposal.proposal_id,
+            status=status,
+            executed_action=proposal.action if status == ExecutionStatus.DELIVERED else None,
+            started_at=started,
+            finished_at=utc_now(),
+            error_code=error,
+        )
+
+    def result_for(self, proposal_id: str) -> object | None:
+        with self._lock:
+            return self._results.get(proposal_id)
 
 
 def create_backend(
@@ -48,6 +107,7 @@ def create_backend(
         cursor_reader=cursor_reader,
         artifact_store=artifact_store,
     )
+    application_launcher = DdeApplicationLauncher()
     capability_loader = capability_loader or load_keybinding_catalogue
     capability_resolver = capability_resolver or find_capability
     platform_provider = DeepinKeybindingProvider(loader=capability_loader, resolver=capability_resolver)
@@ -157,7 +217,7 @@ def create_backend(
         read_observation_state=tree_reader,
         capture_observation=lambda: _capture_observation(input_module, tree_reader),
         active_window_summary=active_window_summary,
-        application_launcher=compositor.application_launcher,
+        application_launcher=application_launcher,
         policy_providers=(platform_provider,),
         list_capabilities=capability_loader,
         find_capability=capability_resolver,

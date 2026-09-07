@@ -2,6 +2,7 @@ import unittest
 from dataclasses import replace
 
 from mcp_autogui.adapters.compositor.treeland import TreelandAdapter
+from mcp_autogui.adapters.backends.treeland_deepin import DdeApplicationLauncher
 from mcp_autogui.adapters.compositor.canonical import CanonicalJsonAdapter
 from mcp_autogui.adapters.evidence.compositor_window import CompositorWindowEvidenceProvider
 from mcp_autogui.core.action_gate import ActionGate
@@ -131,10 +132,9 @@ class FakeExecutor:
 
 
 class CanonicalAdapterTests(unittest.TestCase):
-    def test_treeland_backend_provides_its_application_launcher(self):
-        adapter = TreelandAdapter(lambda: {"layers": []})
-
-        self.assertEqual(adapter.application_launcher.launcher_id, "dde-am")
+    def test_treeland_deepin_backend_launcher_is_not_a_compositor_concern(self):
+        self.assertEqual(DdeApplicationLauncher().launcher_id, "dde-am")
+        self.assertFalse(hasattr(TreelandAdapter(lambda: {"layers": []}), "application_launcher"))
 
     def test_treeland_adapter_filters_raw_fields_and_keeps_artifact_reference(self):
         raw = {

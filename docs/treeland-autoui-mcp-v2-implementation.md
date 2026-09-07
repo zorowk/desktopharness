@@ -18,8 +18,8 @@ secret mechanism 提供，不应提交到 JSON 文件。
 
 - `core/` 包含 canonical 协议对象、Action Gate、ProposalGuard、语义策略、Assertion Evaluator、确定性 Task State Reducer、append-only Ledger、Context Builder 和薄 Orchestrator；可选审计模式使用私有 JSON 对象目录、原始二进制 artifact 目录和 `ledger.csv` 持久化协议对象与事件。
 - `ports/` 定义 compositor、frame、proposal、policy、executor、application launcher、platform capability 和 evidence 契约。
-- `adapters/` 包含 Treeland 与严格 canonical-JSON compositor adapter、Qwen-CUA proposal adapter、PyAutoGUI frame/input adapter、Treeland/Deepin desktop capability adapter，以及 compositor-window、AT-SPI 和 OmniParser evidence provider。Treeland/Deepin desktop adapter 可选提供基于 `dde-am` 的应用启动能力。
-- OmniParser 默认关闭；启用后仅作为只读 `omniparser-grounding` provider。它把截图解析为概率性 `control.*`/`document.text` EvidenceRecord，并以名称/角色的语义 locator 唯一匹配控件；原始响应保存在 artifact 引用中。它不注册 `omniparser_*` 工具，也不执行输入或把视觉 bbox 推断为 Treeland 窗口内的可操作目标。
+- `adapters/` 包含 Treeland 与严格 canonical-JSON compositor adapter、Qwen-CUA proposal adapter、PyAutoGUI frame/input adapter、Treeland/Deepin desktop capability adapter，以及 compositor-window、AT-SPI 和 OmniParser evidence provider。Treeland/Deepin desktop backend 可选提供基于 `dde-am` 的应用启动能力；该 launcher 不属于 compositor adapter。
+- OmniParser 默认关闭；启用后仅作为只读 `omniparser-grounding` provider。它把截图解析为概率性 `control.*`/`document.text` EvidenceRecord，并以名称/角色的语义 locator 唯一匹配控件；原始响应保存在 artifact 引用中。它不注册 `omniparser_*` 工具，也不执行输入或把视觉 bbox 推断为任意 compositor 窗口内的可操作目标。
 - AT-SPI 默认关闭；启用且会话可用时以同一语义 locator 提供独立的可访问性控件 evidence。provider 不可用时只产生缺失证据，不会伪造否定结论。
 - `desktop_backend` 通过 registry 选择 desktop bundle；Treeland/Deepin bundle 提供 compositor、executor、frame provider、窗口手势、桌面能力目录、应用目录和 launcher。主装配只将这些 port 交给 Orchestrator。
 - `facade.py` 实现紧凑的 `gui_run` 操作和诊断对象查询。

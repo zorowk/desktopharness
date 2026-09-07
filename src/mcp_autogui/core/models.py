@@ -139,7 +139,7 @@ class AttributionStage(StrEnum):
 
 
 class AttributionOwner(StrEnum):
-    QWEN = "qwen"
+    MODEL = "model"
     ACTION_GATE = "action-gate"
     EXECUTOR = "executor"
     ENVIRONMENT = "environment"
