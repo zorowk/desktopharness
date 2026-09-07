@@ -14,7 +14,7 @@ fake_pyautogui.size = lambda: (1000, 800)
 fake_pyautogui.screenshot = lambda: PILImage.new("RGB", (1000, 800), "white")
 sys.modules["pyautogui"] = fake_pyautogui
 
-from mcp_autogui.mcp_autogui_main import mcp_autogui_main, register_omniparser_tools
+from mcp_autogui.mcp_autogui_main import mcp_autogui_main
 
 
 class FakeMCP:
@@ -124,10 +124,6 @@ class ToolRegistrationTests(unittest.TestCase):
 
         self.assertNotIn("omniparser_click", mcp.functions)
         self.assertEqual(len(mcp.tools), 5)
-
-    def test_legacy_omniparser_registration_is_hard_disabled(self):
-        with self.assertRaisesRegex(RuntimeError, "direct execution tools are removed"):
-            register_omniparser_tools(self.compose())
 
     def test_json_evidence_configuration_can_disable_compositor_provider(self):
         mcp = self.compose()
