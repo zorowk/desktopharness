@@ -82,29 +82,64 @@ class OmniParserEvidenceProvider:
         if "document.text" in requested and text:
             records.append(self._record(snapshot, subject, {"document.text": text}, artifact_ref))
 
-        # A control fact is meaningful only when its ephemeral element ID is
-        # explicitly scoped by the assertion; otherwise several controls would
-        # look like contradictory evidence for one assertion.
-        wanted_ids = {
-            int(assertion.subject["omniparser_element_id"])
-            for assertion in assertions
-            if assertion.path in self.fact_paths - {"document.text"}
-            and isinstance(assertion.subject.get("omniparser_element_id"), int)
-        }
-        for index in wanted_ids:
-            if not 0 <= index < len(elements) or not isinstance(elements[index], Mapping):
+        for locator in self._requested_control_locators(assertions):
+            matches = [
+                element
+                for element in elements
+                if isinstance(element, Mapping) and self._matches_locator(element, locator)
+            ]
+            # A semantic locator must resolve to exactly one control in the
+            # current frame.  Ambiguous controls deliberately yield no fact.
+            if len(matches) != 1:
                 continue
-            facts = self._control_facts(elements[index], requested)
+            facts = self._control_facts(matches[0], requested)
             if facts:
                 records.append(
                     self._record(
                         snapshot,
-                        {**subject, "omniparser_element_id": index},
+                        {**subject, "control_locator": locator},
                         facts,
                         artifact_ref,
                     )
                 )
         return tuple(records)
+
+    @classmethod
+    def _requested_control_locators(
+        cls, assertions: Sequence[AssertionSpec]
+    ) -> tuple[dict[str, str], ...]:
+        locators: list[dict[str, str]] = []
+        for assertion in assertions:
+            if assertion.path not in cls.fact_paths - {"document.text"}:
+                continue
+            candidate = assertion.subject.get("control_locator")
+            if not isinstance(candidate, Mapping):
+                continue
+            name = candidate.get("name")
+            role = candidate.get("role")
+            if not isinstance(name, str) or not name.strip():
+                continue
+            locator = {"name": cls._normalise(name)}
+            if isinstance(role, str) and role.strip():
+                locator["role"] = cls._normalise(role)
+            if locator not in locators:
+                locators.append(locator)
+        return tuple(locators)
+
+    @classmethod
+    def _matches_locator(cls, element: Mapping[str, Any], locator: Mapping[str, str]) -> bool:
+        text = cls._text(element)
+        if text is None or cls._normalise(text) != locator["name"]:
+            return False
+        requested_role = locator.get("role")
+        if requested_role is None:
+            return True
+        role = element.get("type") or element.get("role")
+        return isinstance(role, str) and cls._normalise(role) == requested_role
+
+    @staticmethod
+    def _normalise(value: str) -> str:
+        return " ".join(value.casefold().split())
 
     @staticmethod
     def _document_text(elements: Sequence[Any]) -> str:

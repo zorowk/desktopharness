@@ -48,7 +48,7 @@ class OmniParserEvidenceTests(unittest.TestCase):
                 AssertionSpec("document", "document.text", "contains", "Save"),
                 AssertionSpec(
                     "button", "control.name", "equals", "Save",
-                    subject={"omniparser_element_id": 1},
+                    subject={"control_locator": {"name": " save ", "role": "BUTTON"}},
                 ),
             ],
             snapshot(),
@@ -56,7 +56,32 @@ class OmniParserEvidenceTests(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertEqual(calls[0][0][0], "http://parser.example:8000/parse/")
         self.assertEqual(records[0].facts, {"document.text": "Hello\nSave"})
-        self.assertEqual(records[1].subject["omniparser_element_id"], 1)
+        self.assertEqual(
+            records[1].subject["control_locator"],
+            {"name": "save", "role": "button"},
+        )
         self.assertEqual(records[1].facts, {"control.name": "Save"})
         self.assertEqual(records[0].confidence, "probabilistic")
         self.assertIsNotNone(records[0].raw_artifact_ref)
+
+    def test_ambiguous_control_locator_emits_no_control_evidence(self):
+        class DuplicateResponse(Response):
+            def json(self):
+                return {"parsed_content_list": [{"type": "button", "text": "Save"}] * 2}
+
+        provider, _ = self.provider()
+        provider.request_post = lambda *_args, **_kwargs: DuplicateResponse()
+        records = provider.collect(
+            [
+                AssertionSpec(
+                    "button",
+                    "control.name",
+                    "equals",
+                    "Save",
+                    subject={"control_locator": {"name": "Save", "role": "button"}},
+                )
+            ],
+            snapshot(),
+        )
+
+        self.assertEqual(records, ())
