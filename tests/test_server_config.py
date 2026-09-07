@@ -57,6 +57,17 @@ class ServerConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "desktop_backend.kind"):
             load_server_config(self.write_config(config_payload(backend="other-desktop")))
 
+    def test_unknown_or_invalid_nested_configuration_is_rejected(self):
+        payload = config_payload()
+        payload["evidence_providers"]["compositor_window"] = {"enabled": "yes"}
+        with self.assertRaisesRegex(ValueError, "enabled must be true or false"):
+            load_server_config(self.write_config(payload))
+
+        payload = config_payload()
+        payload["audit"]["unexpected"] = True
+        with self.assertRaisesRegex(ValueError, "audit has unknown fields"):
+            load_server_config(self.write_config(payload))
+
     def test_registered_backend_factory_is_selected_without_a_platform_branch(self):
         backend_id = "test-desktop-registry"
         captured = {}
