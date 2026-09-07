@@ -2,8 +2,9 @@ import os
 import tempfile
 import time
 import unittest
+from pathlib import Path
 
-from mcp_autogui.core.audit import audit_components_from_environment
+from mcp_autogui.core.audit import audit_components_from_config, audit_components_from_environment
 from mcp_autogui.core.ledger import CsvAuditEventLedger
 from mcp_autogui.core.store import JsonAuditObjectStore
 
@@ -42,6 +43,19 @@ class AuditPersistenceTests(unittest.TestCase):
         finally:
             if original is not None:
                 os.environ["GUI_AUDIT_DIR"] = original
+
+    def test_json_config_ignores_legacy_environment_and_creates_persistent_components(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with unittest.mock.patch.dict(os.environ, {"GUI_AUDIT_DIR": "/legacy"}):
+                store, ledger = audit_components_from_config(
+                    {"directory": directory, "retention_days": 3, "max_gib": 2}
+                )
+
+            self.assertIsInstance(store, JsonAuditObjectStore)
+            self.assertIsInstance(ledger, CsvAuditEventLedger)
+            self.assertEqual(store.directory, Path(directory) / "objects")
+            self.assertEqual(store.retention_days, 3)
+            self.assertEqual(store.max_total_bytes, 2 * 1024 * 1024 * 1024)
 
     def test_retention_prunes_an_object_and_all_of_its_artifacts_together(self):
         with tempfile.TemporaryDirectory() as directory:

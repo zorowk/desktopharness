@@ -32,6 +32,7 @@ def main(argv: list[str] | None = None):
             desktop_backend_kind=(server_config.desktop_backend if server_config else DEFAULT_DESKTOP_BACKEND),
             proposal_provider_config=(server_config.proposal_provider if server_config else None),
             evidence_provider_config=(server_config.evidence_providers if server_config else None),
+            audit_config=(server_config.audit if server_config else None),
         )
         mcp_main.run(transport)
     else:
@@ -41,6 +42,7 @@ def main(argv: list[str] | None = None):
             desktop_backend_kind=(server_config.desktop_backend if server_config else DEFAULT_DESKTOP_BACKEND),
             proposal_provider_config=(server_config.proposal_provider if server_config else None),
             evidence_provider_config=(server_config.evidence_providers if server_config else None),
+            audit_config=(server_config.audit if server_config else None),
         )
         mcp_main.run()
 

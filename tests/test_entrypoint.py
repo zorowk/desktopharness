@@ -87,6 +87,7 @@ class EntrypointTests(unittest.TestCase):
                     kwargs["desktop_backend_kind"],
                     kwargs["proposal_provider_config"],
                     kwargs["evidence_provider_config"],
+                    kwargs["audit_config"],
                 )
             )
             with patch.dict(os.environ, {}, clear=True), patch.dict(
@@ -100,7 +101,7 @@ class EntrypointTests(unittest.TestCase):
 
         self.assertEqual(
             selected_backends,
-            [("treeland-deepin", {"kind": "qwen-cua", "mode": "embedded"}, {})],
+            [("treeland-deepin", {"kind": "qwen-cua", "mode": "embedded"}, {}, {})],
         )
         self.assertEqual(instances[0].kwargs, {"host": "127.0.0.1", "port": "8651"})
         self.assertEqual(instances[0].transport, "streamable-http")

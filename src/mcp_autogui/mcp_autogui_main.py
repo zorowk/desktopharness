@@ -32,7 +32,7 @@ from .core.models import (
     new_id,
 )
 from .core.orchestrator import CoreOrchestrator
-from .core.audit import audit_components_from_environment
+from .core.audit import audit_components_from_config
 from .desktop_backend import DEFAULT_DESKTOP_BACKEND, create_desktop_backend
 from .facade import GuiRunFacade
 from .spatial_fusion import (
@@ -601,12 +601,13 @@ def mcp_autogui_main(
     desktop_backend_kind: str = DEFAULT_DESKTOP_BACKEND,
     proposal_provider_config: dict[str, object] | None = None,
     evidence_provider_config: dict[str, object] | None = None,
+    audit_config: dict[str, object] | None = None,
 ):
     qwen_backend = QwenBackendClient(proposal_provider_config)
     backend_close = getattr(qwen_backend, "close", None)
     if callable(backend_close):
         atexit.register(backend_close)
-    store, ledger = audit_components_from_environment()
+    store, ledger = audit_components_from_config(audit_config)
     desktop_backend = create_desktop_backend(
         desktop_backend_kind,
         tree_reader=lambda: get_treeland_layout_tree(),
