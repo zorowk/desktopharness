@@ -4,7 +4,7 @@
 
 This is an [MCP server](https://modelcontextprotocol.io/introduction) for safe, verifiable desktop automation. Its current implementation is centered on the compositor-neutral AutoUI v2 transaction core; Treeland is the first compositor adapter.
 
-On Treeland, window-tree fusion uses the compositor-provided `treeland-debug tree`
+On Treeland, window-tree fusion uses the compositor-provided `treeland-debug --json tree`
 command. Ensure `treeland-debug` is available in the MCP server's `PATH`.
 
 ## AutoUI v2 generic transaction core

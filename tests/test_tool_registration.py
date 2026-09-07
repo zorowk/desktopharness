@@ -44,7 +44,7 @@ class Backend:
 
 def desktop_tree(app_id="desktop"):
     windows = [{
-        "windowId": "desktop",
+        "id": "desktop",
         "appId": "desktop",
         "title": "Desktop",
         "visible": True,
@@ -54,7 +54,7 @@ def desktop_tree(app_id="desktop"):
     }]
     if app_id != "desktop":
         windows.append({
-            "windowId": app_id,
+            "id": app_id,
             "appId": app_id,
             "title": app_id,
             "visible": True,

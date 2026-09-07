@@ -143,7 +143,7 @@ class CanonicalAdapterTests(unittest.TestCase):
             "layers": [{
                 "name": "BackgroundContainer", "layer": -2, "workspaces": [],
                 "windows": [{
-                    "windowId": 42, "appId": "", "title": "", "visible": True,
+                    "id": 42, "appId": "", "title": "", "visible": True,
                     "active": True, "z": 0, "container": "BackgroundContainer",
                     "geometry": {"x": 0, "y": 0, "width": 1000, "height": 800},
                     "titlebarGeometry": {"implementation": "must-not-leak"},

@@ -179,7 +179,7 @@ class TreelandAdapter:
                 for key in ("appId", "title", "container", "workspace", "output")
             )
             occurrences[identity_seed] = occurrences.get(identity_seed, 0) + 1
-            window_id = raw_window.get("windowId") or raw_window.get("window_id") or raw_window.get("id")
+            window_id = raw_window.get("id")
             if window_id is None:
                 digest = hashlib.sha256(identity_seed.encode("utf-8")).hexdigest()[:16]
                 window_id = f"treeland-{digest}-{occurrences[identity_seed]}"
