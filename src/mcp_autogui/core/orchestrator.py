@@ -40,7 +40,6 @@ from .transaction import (
 )
 from .task_repository import TaskRepository
 from .task_state import TaskStateReducer
-from .transaction_recorder import TransactionRecorder
 
 
 class CoreOrchestrator:
@@ -57,6 +56,9 @@ class CoreOrchestrator:
         denied_actions: frozenset[ActionType] = frozenset(),
         store: ObjectStore | None = None,
         ledger: EventLedger | None = None,
+        audit_store: ObjectStore | None = None,
+        audit_ledger: EventLedger | None = None,
+        diagnostic_enabled: bool = False,
     ) -> None:
         self.compositor = compositor
         self.executor = executor
@@ -69,9 +71,16 @@ class CoreOrchestrator:
         for provider in self.evidence_providers:
             for path in provider.fact_paths:
                 require_standard_fact_path(path)
-        self._audit = AuditRecorder(store, ledger)
+        self._audit = AuditRecorder(
+            store,
+            ledger,
+            audit_store=audit_store,
+            audit_ledger=audit_ledger,
+            diagnostic_enabled=diagnostic_enabled,
+        )
         self.store = self._audit.store
         self.ledger = self._audit.ledger
+        self.diagnostic_enabled = diagnostic_enabled
         self.validator = ProposalValidator(
             compositor.descriptor,
             compositor.hit_test,
@@ -82,7 +91,6 @@ class CoreOrchestrator:
         self.reducer = TaskStateReducer()
         self.context_builder = ContextBuilder()
         self._tasks = TaskRepository()
-        self._transactions = TransactionRecorder(self._tasks, self._audit)
         self._execution_lock = RLock()
 
     def register_task(self, contract: TaskContract) -> TaskState:
@@ -98,7 +106,9 @@ class CoreOrchestrator:
             if assertion.operator not in SUPPORTED_OPERATORS:
                 raise ValueError(f"unsupported assertion operator: {assertion.operator}")
         state = self._tasks.register(contract)
-        contract_ref = self.store.put(contract, prefix="task-contract")
+        contract_ref = self._audit.put(
+            contract.task_id, contract, prefix="task-contract"
+        )
         self._append_event(contract.task_id, "task.created", contract_ref)
         return state
 
@@ -110,7 +120,7 @@ class CoreOrchestrator:
         """Record a canonical observation captured by an adapter-aware facade."""
         self._require_task(task_id)
         self._tasks.set_snapshot(task_id, snapshot)
-        self.store.put(snapshot, object_ref=snapshot.snapshot_id)
+        self._audit.put(task_id, snapshot, object_ref=snapshot.snapshot_id)
         self._append_event(
             task_id,
             "snapshot.created",
@@ -133,8 +143,7 @@ class CoreOrchestrator:
         snapshot = self._tasks.snapshot(task_id) or self.observe(task_id)
         frame = self.frame_provider.capture_frame() if self.frame_provider is not None else None
         if frame is not None:
-            self._tasks.set_frame(task_id, frame)
-            self.store.put(frame, object_ref=frame.frame_id)
+            self._audit.put(task_id, frame, object_ref=frame.frame_id)
             self._append_event(
                 task_id,
                 "frame.captured",
@@ -179,7 +188,7 @@ class CoreOrchestrator:
             ),
             strategy=strategy,
         )
-        self.store.put(context, object_ref=context.model_context_id)
+        self._audit.put(task_id, context, object_ref=context.model_context_id)
         try:
             proposal = self.proposal_provider.propose(context)
         except Exception as exc:
@@ -217,8 +226,8 @@ class CoreOrchestrator:
         provider_owned: bool = False,
     ) -> ActionProposal:
         self._require_task(task_id)
-        self._tasks.submit_proposal(task_id, proposal.proposal_id, provider_owned=provider_owned)
-        self.store.put(proposal, object_ref=proposal.proposal_id)
+        self._tasks.submit_proposal(task_id, proposal, provider_owned=provider_owned)
+        self._audit.put(task_id, proposal, object_ref=proposal.proposal_id)
         causal_events = caused_by or self._causes_for(proposal.based_on_snapshot)
         if proposal.debug_ref:
             diagnostic = self._append_event(
@@ -244,9 +253,9 @@ class CoreOrchestrator:
         task_id = self._tasks.task_for_proposal(proposal_id)
         if task_id is None:
             raise KeyError(proposal_id)
-        proposal: ActionProposal = self.store.require(proposal_id)
-        snapshot = self.store.get(proposal.based_on_snapshot)
-        if not isinstance(snapshot, CanonicalSnapshot):
+        proposal = self._tasks.proposal(proposal_id)
+        snapshot = self._tasks.snapshot_by_id(proposal.based_on_snapshot)
+        if snapshot is None:
             return ValidationFailure(ReasonCode.SNAPSHOT_UNAVAILABLE, False)
         return self.validator.prepare(snapshot, proposal)
 
@@ -274,7 +283,7 @@ class CoreOrchestrator:
         existing_receipt = self._tasks.terminal_receipt(proposal_id)
         if existing_receipt is not None:
             return existing_receipt
-        proposal: ActionProposal = self.store.require(proposal_id)
+        proposal = self._tasks.proposal(proposal_id)
         prepared = self.prepare(proposal_id)
         if isinstance(prepared, ValidationFailure):
             self._record_validation_failure(task_id, proposal, prepared)
@@ -302,8 +311,15 @@ class CoreOrchestrator:
             proposal,
             actions=tuple(action for action in proposal.actions if action.type != ActionType.DONE),
         )
-        self._tasks.update_state(
-            task_id, lambda state: replace(state, step=state.step + 1, status=TaskStatus.RUNNING)
+        self._transition_state(
+            task_id,
+            replace(
+                self._tasks.state(task_id),
+                step=self._tasks.state(task_id).step + 1,
+                status=TaskStatus.RUNNING,
+            ),
+            caused_by=self._causes_for(proposal.proposal_id),
+            snapshot_id=latest.snapshot_id,
         )
         receipt = self._execute_action_sequence(executable)
         self._record_receipt(task_id, receipt)
@@ -396,7 +412,7 @@ class CoreOrchestrator:
             for record in records:
                 if not set(record.facts) <= set(provider.fact_paths):
                     raise ValueError(f"provider emitted undeclared facts: {provider.provider_id}")
-                self.store.put(record, object_ref=record.evidence_id)
+                self._audit.put(task_id, record, object_ref=record.evidence_id)
                 event = self._append_event(
                     task_id,
                     "evidence.collected",
@@ -413,7 +429,9 @@ class CoreOrchestrator:
         )
         result_events = []
         for result in results:
-            result_ref = self.store.put(result, prefix="assertion-result")
+            result_ref = self._audit.put(
+                task_id, result, prefix="assertion-result"
+            )
             event = self._append_event(
                 task_id,
                 "assertion.evaluated",
@@ -424,8 +442,11 @@ class CoreOrchestrator:
             result_events.append(event.event_id)
         state = self.reducer.reduce(contract, self._tasks.state(task_id), results)
         self._tasks.set_results(task_id, results)
-        self._transactions.state(
-            task_id, state, caused_by=tuple(result_events), snapshot_id=snapshot.snapshot_id
+        self._transition_state(
+            task_id,
+            state,
+            caused_by=tuple(result_events),
+            snapshot_id=snapshot.snapshot_id,
         )
         if state.status in {TaskStatus.RETRYING, TaskStatus.FAILED}:
             failed_refs = tuple(
@@ -492,13 +513,18 @@ class CoreOrchestrator:
                 latest_receipt is None
                 or latest_receipt.status != ExecutionStatus.DELIVERED
             ):
-                state = self._tasks.update_state(
-                    task_id, lambda current: replace(current, status=TaskStatus.FAILED)
+                state = self._transition_state(
+                    task_id,
+                    replace(self._tasks.state(task_id), status=TaskStatus.FAILED),
+                    caused_by=self._causes_for(proposal.proposal_id),
+                    snapshot_id=proposal.based_on_snapshot,
                 )
                 return {"proposal": proposal, "validation": None, "receipt": None, "state": state}
             state = self.reducer.delivered_unverified(self._tasks.state(task_id))
-            self._transactions.state(
-                task_id, state, caused_by=self._causes_for(proposal.proposal_id),
+            self._transition_state(
+                task_id,
+                state,
+                caused_by=self._causes_for(proposal.proposal_id),
                 snapshot_id=proposal.based_on_snapshot,
             )
             return {"proposal": proposal, "validation": None, "receipt": None, "state": state}
@@ -521,8 +547,10 @@ class CoreOrchestrator:
             }
         if has_done and not self._tasks.contract(task_id).assertions:
             state = self.reducer.delivered_unverified(self._tasks.state(task_id))
-            self._transactions.state(
-                task_id, state, caused_by=self._causes_for(receipt.execution_id),
+            self._transition_state(
+                task_id,
+                state,
+                caused_by=self._causes_for(receipt.execution_id),
                 snapshot_id=proposal.based_on_snapshot,
             )
             return {"proposal": proposal, "validation": None, "receipt": receipt, "state": state}
@@ -627,7 +655,7 @@ class CoreOrchestrator:
         if receipt is None or receipt.status != ExecutionStatus.DELIVERED:
             raise ValueError("delivered-unverified requires a fully delivered action sequence")
         state = self.reducer.delivered_unverified(self._tasks.state(task_id))
-        self._transactions.state(
+        self._transition_state(
             task_id,
             state,
             caused_by=self._causes_for(receipt.execution_id),
@@ -651,7 +679,8 @@ class CoreOrchestrator:
             resetter = getattr(self.proposal_provider, "reset", None)
             if callable(resetter):
                 resetter(task_id)
-            reset_ref = self.store.put(
+            reset_ref = self._audit.put(
+                task_id,
                 {
                     "task_id": task_id,
                     "previous_state": to_primitive(self._tasks.state(task_id)),
@@ -684,8 +713,10 @@ class CoreOrchestrator:
             self._tasks.contract(task_id), self._tasks.state(task_id),
             retryable=failure.retryable,
         )
-        self._transactions.state(
-            task_id, state, caused_by=self._causes_for(proposal.proposal_id),
+        self._transition_state(
+            task_id,
+            state,
+            caused_by=self._causes_for(proposal.proposal_id),
             snapshot_id=proposal.based_on_snapshot,
         )
         self._finalize_provider_outcome(
@@ -706,13 +737,22 @@ class CoreOrchestrator:
         if self._tasks.finalized(proposal.proposal_id):
             return
         if self._tasks.provider_owns(proposal.proposal_id):
-            if not self._transactions.notify_outcome(
-                self.proposal_provider,
-                task_id,
-                status=status,
-                proposal=proposal,
-                reason=reason,
-            ):
+            callback = getattr(self.proposal_provider, "record_outcome", None)
+            notified = True
+            if callable(callback):
+                try:
+                    callback(
+                        task_id,
+                        status=status,
+                        execution={
+                            "proposal": to_primitive(proposal),
+                            "delivered": False,
+                        },
+                        reason=reason,
+                    )
+                except Exception:
+                    notified = False
+            if not notified:
                 self._record_attribution(
                     task_id,
                     AttributionEventKind.ERROR,
@@ -731,11 +771,13 @@ class CoreOrchestrator:
         terminal: bool = True,
         notify_provider: bool = True,
     ) -> None:
-        self._transactions.receipt(
+        self._tasks.record_receipt(task_id, receipt, terminal=terminal)
+        self._audit.put(task_id, receipt, object_ref=receipt.execution_id)
+        self._append_event(
             task_id,
-            receipt,
+            "execution.completed",
+            receipt.execution_id,
             caused_by=self._causes_for(receipt.proposal_id),
-            terminal=terminal,
         )
         proposal_owner = self._tasks.task_for_proposal(receipt.proposal_id)
         if (
@@ -744,7 +786,14 @@ class CoreOrchestrator:
             and self._tasks.provider_owns(receipt.proposal_id)
             and not self._tasks.finalized(receipt.proposal_id)
         ):
-            if not self._transactions.notify_receipt(self.proposal_provider, task_id, receipt):
+            callback = getattr(self.proposal_provider, "record_execution", None)
+            notified = True
+            if callable(callback):
+                try:
+                    callback(task_id, receipt)
+                except Exception:
+                    notified = False
+            if not notified:
                 # The receipt remains authoritative. Feedback failure affects
                 # only the model adapter's future context and is diagnostic.
                 self._record_attribution(
@@ -757,8 +806,15 @@ class CoreOrchestrator:
                 )
             self._tasks.finalize(receipt.proposal_id)
         if receipt.status != ExecutionStatus.DELIVERED:
-            self._tasks.set_state(
-                self.reducer.execution_failure(self._tasks.state(task_id))
+            self._transition_state(
+                task_id,
+                self.reducer.execution_failure(self._tasks.state(task_id)),
+                caused_by=self._causes_for(receipt.execution_id),
+                snapshot_id=(
+                    self._tasks.snapshot(task_id).snapshot_id
+                    if self._tasks.snapshot(task_id) is not None
+                    else ""
+                ),
             )
         if receipt.status == ExecutionStatus.FAILED:
             self._record_attribution(
@@ -796,6 +852,36 @@ class CoreOrchestrator:
             evidence_refs=evidence_refs,
             evidence_status=evidence_status,
         )
+
+    def _transition_state(
+        self,
+        task_id: str,
+        state: TaskState,
+        *,
+        caused_by: tuple[str, ...],
+        snapshot_id: str,
+    ) -> TaskState:
+        self._tasks.set_state(state)
+        reference = self._audit.put(task_id, state, prefix="task-state")
+        self._append_event(
+            task_id,
+            "task.transitioned",
+            reference,
+            caused_by=caused_by,
+            snapshot_id=snapshot_id or None,
+        )
+        return state
+
+    def store_runtime_object(
+        self, value: Any, *, task_id: str | None = None, prefix: str = "object"
+    ) -> str:
+        return self._audit.put_diagnostic(
+            value, task_id=task_id, prefix=prefix
+        )
+
+    @property
+    def recording_errors(self) -> tuple[str, ...]:
+        return self._audit.recording_errors
 
     def attributions(self, task_id: str) -> tuple[Attribution, ...]:
         """Return current or historical audit attribution facts for a task."""

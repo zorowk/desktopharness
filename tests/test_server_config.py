@@ -30,7 +30,13 @@ def config_payload(*, backend="treeland-deepin"):
         },
         "deployment": {"denied_actions": []},
         "evidence_providers": {"omniparser": {"enabled": False, "endpoint": ""}},
-        "audit": {"directory": "/tmp/autoui-audit", "retention_days": 3, "max_gib": 16},
+        "recording": {
+            "audit": True,
+            "diagnostic": False,
+            "directory": "/tmp/autoui-audit",
+            "retention_days": 3,
+            "max_gib": 16,
+        },
     }
 
 
@@ -53,7 +59,9 @@ class ServerConfigTests(unittest.TestCase):
         self.assertEqual(config.proposal_provider["model"], "qwen3_rl")
         self.assertEqual(config.deployment_denied_actions, frozenset())
         self.assertFalse(config.evidence_providers["omniparser"]["enabled"])
-        self.assertEqual(config.audit["retention_days"], 3)
+        self.assertEqual(config.recording["retention_days"], 3)
+        self.assertTrue(config.recording["audit"])
+        self.assertFalse(config.recording["diagnostic"])
 
     def test_unknown_backend_is_rejected_before_server_start(self):
         with self.assertRaisesRegex(ValueError, "desktop_backend.kind"):
@@ -77,8 +85,8 @@ class ServerConfigTests(unittest.TestCase):
             load_server_config(self.write_config(payload))
 
         payload = config_payload()
-        payload["audit"]["unexpected"] = True
-        with self.assertRaisesRegex(ValueError, "audit has unknown fields"):
+        payload["recording"]["unexpected"] = True
+        with self.assertRaisesRegex(ValueError, "recording has unknown fields"):
             load_server_config(self.write_config(payload))
 
         payload = config_payload()
@@ -109,6 +117,16 @@ class ServerConfigTests(unittest.TestCase):
         payload = config_payload()
         payload["policy_providers"] = {}
         with self.assertRaisesRegex(ValueError, "unknown fields: policy_providers"):
+            load_server_config(self.write_config(payload))
+
+        payload = config_payload()
+        payload["recording"] = {"audit": False, "diagnostic": True}
+        with self.assertRaisesRegex(ValueError, "diagnostic=true requires"):
+            load_server_config(self.write_config(payload))
+
+        payload = config_payload()
+        payload["audit"] = {}
+        with self.assertRaisesRegex(ValueError, "unknown fields: audit"):
             load_server_config(self.write_config(payload))
 
     def test_effective_config_is_non_secret(self):

@@ -33,6 +33,7 @@ class RuntimeDescription:
         denied_actions: Iterable[object],
         context_strategies: Iterable[str],
         effective_config: Mapping[str, Any] | None = None,
+        recording: Mapping[str, Any] | None = None,
     ) -> RuntimeDescription:
         descriptor = compositor.descriptor
         description = {
@@ -63,6 +64,9 @@ class RuntimeDescription:
             "deployment": {
                 "denied_actions": sorted(str(getattr(item, "value", item)) for item in denied_actions),
             },
+            "recording": to_primitive(
+                recording or {"audit": False, "diagnostic": False}
+            ),
             "proposal_model": {
                 "actions": "ordered-sequence",
                 "validation_scope": "proposal",

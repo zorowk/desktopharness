@@ -3,7 +3,7 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 
-from .core.audit import audit_components_from_config
+from .core.audit import recording_components_from_config
 from .core.context_builder import ContextBuilder
 from .core.orchestrator import CoreOrchestrator
 from .desktop_backend import DEFAULT_DESKTOP_BACKEND, create_desktop_backend
@@ -24,7 +24,7 @@ def mcp_autogui_main(
     proposal_provider_config: dict[str, object] | None = None,
     denied_actions=frozenset(),
     evidence_provider_config: dict[str, object] | None = None,
-    audit_config: dict[str, object] | None = None,
+    recording_config: dict[str, object] | None = None,
     effective_config: dict[str, object] | None = None,
     run_blocking_override=None,
 ):
@@ -39,7 +39,8 @@ def mcp_autogui_main(
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(worker_pool, partial(function, *args, **kwargs))
 
-    store, ledger = audit_components_from_config(audit_config)
+    recording = recording_components_from_config(recording_config)
+    store = recording.runtime_store
     desktop_backend = create_desktop_backend(
         desktop_backend_kind,
         artifact_store=store,
@@ -69,7 +70,10 @@ def mcp_autogui_main(
         evidence_providers=evidence_providers,
         denied_actions=denied_actions,
         store=store,
-        ledger=ledger,
+        ledger=recording.runtime_ledger,
+        audit_store=recording.audit_store,
+        audit_ledger=recording.audit_ledger,
+        diagnostic_enabled=recording.diagnostic_enabled,
     )
     runtime_description = RuntimeDescription.from_components(
         compositor=compositor,
@@ -80,6 +84,10 @@ def mcp_autogui_main(
         denied_actions=denied_actions,
         context_strategies=ContextBuilder.STRATEGIES,
         effective_config=effective_config,
+        recording={
+            "audit": recording.audit_enabled,
+            "diagnostic": recording.diagnostic_enabled,
+        },
     )
     facade = AutoUIFacade(runtime, runtime_description)
     desktop_tools = desktop_backend.create_tools(
@@ -107,29 +115,30 @@ def mcp_autogui_main(
             max_iterations=max_iterations,
         )
 
-    @mcp.tool()
-    async def gui_diagnostic(
-        operation: str,
-        task_id: str = '',
-        task_contract: dict | None = None,
-        proposal: dict | None = None,
-        proposal_id: str = '',
-        strategy: str = 'compact',
-        object_ref: str = '',
-        max_iterations: int | None = None,
-    ) -> dict:
-        """诊断控制器阶段：observe、propose、prepare、execute、evaluate、trace。"""
-        return await run_blocking(
-            facade.handle_diagnostic,
-            operation,
-            task_id=task_id,
-            task_contract=task_contract,
-            proposal=proposal,
-            proposal_id=proposal_id,
-            strategy=strategy,
-            object_ref=object_ref,
-            max_iterations=max_iterations,
-        )
+    if recording.diagnostic_enabled:
+        @mcp.tool()
+        async def gui_diagnostic(
+            operation: str,
+            task_id: str = '',
+            task_contract: dict | None = None,
+            proposal: dict | None = None,
+            proposal_id: str = '',
+            strategy: str = 'compact',
+            object_ref: str = '',
+            max_iterations: int | None = None,
+        ) -> dict:
+            """诊断控制器阶段：observe、propose、prepare、execute、evaluate、trace。"""
+            return await run_blocking(
+                facade.handle_diagnostic,
+                operation,
+                task_id=task_id,
+                task_contract=task_contract,
+                proposal=proposal,
+                proposal_id=proposal_id,
+                strategy=strategy,
+                object_ref=object_ref,
+                max_iterations=max_iterations,
+            )
 
     @mcp.tool()
     async def desktop_capabilities_list(category: str = '') -> list[dict]:

@@ -18,8 +18,9 @@ v2 公开调用流程为：
 2. `gui_run(operation="status", task_id=...)`
 3. `gui_run(operation="reset", task_id=...)`
 
-正常响应只返回包含 `object_ref` 的紧凑信封；诊断时使用
-`gui_diagnostic` 的 `observe`、`propose`、`prepare`、`execute`、`evaluate` 和 `trace`。
+正常响应只返回紧凑任务状态。只有同时启用 `recording.audit` 和
+`recording.diagnostic` 时才注册 `gui_diagnostic` 并返回可追踪的 `object_ref`；
+诊断接口提供 `observe`、`propose`、`prepare`、`execute`、`evaluate` 和 `trace`。
 模型给出的 `claimed_intent` 只作为诊断信息，不参与执行控制。
 `ExecutionReceipt.status=delivered` 只表示输入已注入，不表示应用响应或任务完成。
 
@@ -61,6 +62,19 @@ export CUA_MODEL_API_KEY=your-model-api-key   # 模型端点不校验时可省�
 ```json
 "deployment": {
   "denied_actions": ["keyboard.text", "keyboard.shortcut"]
+}
+```
+
+记录功能默认关闭。仅审计模式只保存任务、Proposal、实际回执、断言与状态转换，
+不保存截图、模型原文、完整桌面树或完整证据；诊断模式必须依赖审计：
+
+```json
+"recording": {
+  "audit": true,
+  "diagnostic": true,
+  "directory": ".autoui-audit",
+  "retention_days": 7,
+  "max_gib": 16
 }
 ```
 

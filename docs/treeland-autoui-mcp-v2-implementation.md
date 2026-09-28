@@ -10,8 +10,9 @@
 
 ## 当前状态与执行约定
 
-S1、S2 已在当前工作区完成：领域 schema version 为 `2`，运行描述 revision 为 `2.2`，JSON 配置 schema 为 `2`。
+S1、S2、S3 已在当前工作区完成：领域 schema version 为 `2`，运行描述 revision 为 `2.2`，JSON 配置 schema 为 `2`。
 默认执行链已改为 ProposalValidator prepare/recheck，不再包含语义审批、任务权限或确认分支。
+TaskRepository 是运行态所有者；记录默认关闭，诊断工具只在 audit 与 diagnostic 同时启用时注册。
 真实 Treeland/Deepin 验收尚未完成。
 
 项目尚未商用，允许破坏性变更：旧接口、字段、别名和兼容分支直接删除，同步修改仓库内调用方、
@@ -25,7 +26,7 @@ S1、S2 已在当前工作区完成：领域 schema version 为 `2`，运行描�
 | S0 | 功能基线与真实任务记录 | 已完成自动基线；真实桌面环境阻塞 |
 | S1 | 统一当前协议，删除旧兼容入口 | 已实施；自动回归通过，真实模型/桌面未测 |
 | S2 | 轻量校验执行链，删除审批框架 | 已实施；自动回归通过，真实模型/桌面未测 |
-| S3 | 单一运行态、精简记录及诊断解耦 | 待实施 |
+| S3 | 单一运行态、精简记录及诊断解耦 | 已实施；自动回归通过，真实模型/桌面未测 |
 | S4 | 默认依赖、配置、文档与示例收敛 | 待实施 |
 | S5 | 全量回归、真实桌面验收及版本交付 | 待实施 |
 
@@ -173,6 +174,15 @@ stale、execution、assertion 及空断言 `delivered-unverified`，Qwen 对未�
 诊断开启可 trace 当前记录，重复执行保护不依赖磁盘存储；关闭记录不返回 trace 引用，仅审计不注册诊断工具，reset 和进程退出后内存引用均失效。
 
 **建议拆分**：运行态读取脱离审计 → 删除重复索引和事务透传层 → 可选持久化与精简归因 → reset/记录失败/模型反馈回归。检查关闭记录、仅审计、开启诊断三种配置的行为与引用有效性。
+
+**S3 记录（2026-09-24）**：Proposal、snapshot、receipt、assertion 和去重均由 TaskRepository
+持有，执行与 status 不再从审计对象反查；TaskState 统一通过编排器的单一 transition 入口写回。
+删除 TransactionRecorder，模型反馈与回执记录回到编排器。配置迁移为 `recording.audit` /
+`recording.diagnostic`，两者默认关闭，diagnostic 必须依赖 audit。仅审计模式只持久化任务、
+Proposal、实际回执、断言、状态转换及精简失败归因；完整诊断才保存截图、模型原文、桌面树、
+证据和 trace 对象。reset 清理任务运行态、去重、模型会话及内存引用，但保留审计历史；持久化失败
+不会改变真实执行回执或触发重放。自动回归为 `125 tests passed`；真实记录目录、Qwen 与 Treeland
+桌面验收仍待 S5。
 
 ## S4：依赖、配置与使用入口收敛
 

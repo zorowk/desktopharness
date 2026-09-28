@@ -47,6 +47,14 @@ class EventLedger:
             self._events[task_id].append(event)
             return event
 
+    def record(self, event: LedgerEvent) -> None:
+        """Record an existing event without assigning a second identity."""
+        with self._lock:
+            events = self._events[event.task_id]
+            if any(item.event_id == event.event_id for item in events):
+                return
+            events.append(event)
+
     def events(self, task_id: str) -> tuple[LedgerEvent, ...]:
         with self._lock:
             return tuple(self._events.get(task_id, ()))
@@ -74,6 +82,12 @@ class CsvAuditEventLedger(EventLedger):
         event = super().append(*args, **kwargs)
         self._append_csv(event)
         return event
+
+    def record(self, event: LedgerEvent) -> None:
+        before = len(self._events[event.task_id])
+        super().record(event)
+        if len(self._events[event.task_id]) != before:
+            self._append_csv(event)
 
     def clear(self, task_id: str) -> None:
         super().clear(task_id)

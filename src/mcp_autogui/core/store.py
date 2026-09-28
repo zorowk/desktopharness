@@ -43,6 +43,10 @@ class ObjectStore:
             raise KeyError(reference)
         return value
 
+    def discard(self, reference: str) -> None:
+        with self._lock:
+            self._objects.pop(reference, None)
+
     def clear(self) -> None:
         with self._lock:
             self._objects.clear()

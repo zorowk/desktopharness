@@ -3,7 +3,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
-from mcp_autogui.core.audit import audit_components_from_config
+from mcp_autogui.core.audit import recording_components_from_config
 from mcp_autogui.core.ledger import CsvAuditEventLedger
 from mcp_autogui.core.store import JsonAuditObjectStore
 
@@ -61,9 +61,16 @@ class AuditPersistenceTests(unittest.TestCase):
     def test_json_config_creates_persistent_components(self):
         with tempfile.TemporaryDirectory() as directory:
             with unittest.mock.patch.dict(os.environ, {"GUI_AUDIT_DIR": "/legacy"}):
-                store, ledger = audit_components_from_config(
-                    {"directory": directory, "retention_days": 3, "max_gib": 2}
+                components = recording_components_from_config(
+                    {
+                        "audit": True,
+                        "diagnostic": False,
+                        "directory": directory,
+                        "retention_days": 3,
+                        "max_gib": 2,
+                    }
                 )
+                store, ledger = components.audit_store, components.audit_ledger
 
             self.assertIsInstance(store, JsonAuditObjectStore)
             self.assertIsInstance(ledger, CsvAuditEventLedger)

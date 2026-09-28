@@ -96,3 +96,12 @@ class CoreBoundaryTests(unittest.TestCase):
             "validator",
         ):
             self.assertNotIn(f"self.runtime.{component}", facade)
+
+    def test_runtime_state_has_one_write_path_and_no_transaction_recorder(self):
+        orchestrator = (CORE / "orchestrator.py").read_text(encoding="utf-8")
+
+        self.assertFalse((CORE / "transaction_recorder.py").exists())
+        self.assertNotIn("TransactionRecorder", orchestrator)
+        self.assertNotIn("self._tasks.update_state", orchestrator)
+        self.assertEqual(orchestrator.count("self._tasks.set_state(state)"), 1)
+        self.assertNotIn("self.store.require(proposal_id)", orchestrator)

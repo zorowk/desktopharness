@@ -46,7 +46,7 @@ def main(argv: list[str] | None = None):
         proposal_provider_config=server_config.proposal_provider,
         denied_actions=server_config.deployment_denied_actions,
         evidence_provider_config=server_config.evidence_providers,
-        audit_config=server_config.audit,
+        recording_config=server_config.recording,
         effective_config=effective_config,
     )
     mcp_main.run(server_config.transport_mode)

@@ -58,7 +58,7 @@ class EntrypointTests(unittest.TestCase):
                     kwargs["proposal_provider_config"],
                     kwargs["denied_actions"],
                     kwargs["evidence_provider_config"],
-                    kwargs["audit_config"],
+                    kwargs["recording_config"],
                     kwargs["effective_config"],
                 )
             )
@@ -79,7 +79,13 @@ class EntrypointTests(unittest.TestCase):
                     {"kind": "qwen-cua"},
                     frozenset(),
                     {},
-                    {},
+                    {
+                        "audit": False,
+                        "diagnostic": False,
+                        "directory": ".autoui-audit",
+                        "retention_days": 7,
+                        "max_gib": 16,
+                    },
                     {
                         "config_path": str(path),
                         "transport": {
@@ -90,7 +96,13 @@ class EntrypointTests(unittest.TestCase):
                         "proposal_provider": {"kind": "qwen-cua"},
                         "deployment": {"denied_actions": []},
                         "evidence_providers": {},
-                        "audit": {},
+                        "recording": {
+                            "audit": False,
+                            "diagnostic": False,
+                            "directory": ".autoui-audit",
+                            "retention_days": 7,
+                            "max_gib": 16,
+                        },
                     },
                 )
             ],

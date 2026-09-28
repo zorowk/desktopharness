@@ -41,8 +41,10 @@
       "endpoint": ""
     }
   },
-  "audit": {
-    "directory": ".autoui-audit-v2",
+  "recording": {
+    "audit": false,
+    "diagnostic": false,
+    "directory": ".autoui-audit",
     "retention_days": 7,
     "max_gib": 16
   }

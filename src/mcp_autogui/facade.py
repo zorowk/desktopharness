@@ -46,7 +46,9 @@ class AutoUIFacade:
                 "call-run-status-or-reset",
             )
         try:
-            return self._handle_public(normalized, **kwargs)
+            return self._with_recording_status(
+                self._handle_public(normalized, **kwargs)
+            )
         except KeyError as exc:
             return self._public_failure(
                 normalized, ReasonCode.OBJECT_NOT_FOUND, str(exc), "describe-or-create-task"
@@ -85,7 +87,9 @@ class AutoUIFacade:
                 },
             )
         try:
-            return self._handle_diagnostic(normalized, **kwargs)
+            return self._with_recording_status(
+                self._handle_diagnostic(normalized, **kwargs)
+            )
         except KeyError as exc:
             return diagnostic_response(
                 normalized,
@@ -121,11 +125,19 @@ class AutoUIFacade:
         max_iterations: int | None = None,
     ) -> dict[str, Any]:
         if operation == "describe":
-            return reduce_public_response(
+            description = self._description()
+            reference = (
+                self.runtime.store_runtime_object(description, prefix="description")
+                if self.runtime.diagnostic_enabled
+                else None
+            )
+            response = reduce_public_response(
                 operation,
                 task_state=None,
-                object_ref=self._store_description(),
+                object_ref=reference,
             )
+            response["object"] = description
+            return response
 
         resolved_task = self._prepare_task(task_id, task_contract)
         if operation == "run":
@@ -134,7 +146,13 @@ class AutoUIFacade:
                 strategy=strategy,
                 max_iterations=max_iterations,
             )
-            ref = self.runtime.store.put(value, prefix="run-result")
+            ref = (
+                self.runtime.store_runtime_object(
+                    value, task_id=resolved_task, prefix="run-result"
+                )
+                if self.runtime.diagnostic_enabled
+                else None
+            )
             return reduce_public_response(
                 operation,
                 task_state=value["state"].status.value,
@@ -143,7 +161,13 @@ class AutoUIFacade:
             )
         if operation == "status":
             state = self.runtime.status(resolved_task)
-            ref = self.runtime.store.put(state, prefix="task-state")
+            ref = (
+                self.runtime.store_runtime_object(
+                    state, task_id=resolved_task, prefix="task-state"
+                )
+                if self.runtime.diagnostic_enabled
+                else None
+            )
             return reduce_public_response(
                 operation,
                 task_state=state.status.value,
@@ -293,11 +317,20 @@ class AutoUIFacade:
         return resolved_task
 
     def _store_description(self) -> str:
+        return self.runtime.store_runtime_object(
+            self._description(), prefix="description"
+        )
+
+    def _description(self) -> dict[str, Any]:
         description = self._runtime_description.to_dict()
         description["actions"] = [item.value for item in ActionType]
         description["operations"] = sorted(_PUBLIC_OPERATIONS)
-        description["diagnostic_operations"] = sorted(_DIAGNOSTIC_OPERATIONS)
-        return self.runtime.store.put(description, prefix="description")
+        description["diagnostic_operations"] = (
+            sorted(_DIAGNOSTIC_OPERATIONS)
+            if self.runtime.diagnostic_enabled
+            else []
+        )
+        return description
 
     def _diagnostic_response(
         self,
@@ -320,8 +353,8 @@ class AutoUIFacade:
             ]
         return response
 
-    @staticmethod
     def _public_failure(
+        self,
         operation: str,
         code: ReasonCode,
         message: str,
@@ -340,7 +373,7 @@ class AutoUIFacade:
                 "required_action": required_action,
             },
         )
-        if debug_ref:
+        if debug_ref and self.runtime.diagnostic_enabled:
             response["debug_ref"] = debug_ref
         return response
 
@@ -350,6 +383,15 @@ class AutoUIFacade:
             for event in reversed(self.runtime.ledger.events(task_id))
             if event.event_type == event_type
         )
+
+    def _with_recording_status(self, response: dict[str, Any]) -> dict[str, Any]:
+        if self.runtime.recording_errors:
+            response["recording"] = {
+                "status": "failed",
+                "message": self.runtime.recording_errors[-1],
+                "retry": False,
+            }
+        return response
 
 
 def _diagnostic_receipt_status(receipt: ExecutionReceipt) -> str:

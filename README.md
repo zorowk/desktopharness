@@ -21,8 +21,9 @@ The default v2 lifecycle is:
 2. `gui_run(operation="status", task_id=...)`
 3. `gui_run(operation="reset", task_id=...)` to begin again
 
-Normal responses are compact envelopes containing a public task status and an
-`object_ref`. Use `gui_diagnostic` for `observe`, `propose`, `prepare`,
+Normal responses are compact envelopes containing a public task status. Persistent
+`object_ref` values and the `gui_diagnostic` tool are available only when both
+`recording.audit` and `recording.diagnostic` are enabled. Diagnostics provide `observe`, `propose`, `prepare`,
 `execute`, `evaluate`, and `trace` when inspecting one controller stage or an
 object. `claimed_intent` is diagnostic model output and does not control execution. An
 execution receipt with `status=delivered` confirms input injection, not
@@ -73,6 +74,20 @@ Raw-action restriction is opt-in and disabled in the default configuration:
 ```json
 "deployment": {
   "denied_actions": ["keyboard.text", "keyboard.shortcut"]
+}
+```
+
+Recording is also disabled by default. Audit-only mode keeps the minimal task,
+proposal, receipt, assertion, and transition history without screenshots, raw
+model output, desktop trees, or full evidence. Diagnostic mode requires audit:
+
+```json
+"recording": {
+  "audit": true,
+  "diagnostic": true,
+  "directory": ".autoui-audit",
+  "retention_days": 7,
+  "max_gib": 16
 }
 ```
 

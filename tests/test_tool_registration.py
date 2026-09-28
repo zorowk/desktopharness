@@ -1,5 +1,6 @@
 import asyncio
 import sys
+import tempfile
 import types
 import unittest
 from unittest.mock import patch
@@ -91,6 +92,17 @@ def desktop_tree(app_id="desktop"):
 
 
 class ToolRegistrationTests(unittest.TestCase):
+    def setUp(self):
+        self.recording_directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.recording_directory.cleanup)
+
+    def diagnostic_recording(self):
+        return {
+            "audit": True,
+            "diagnostic": True,
+            "directory": self.recording_directory.name,
+        }
+
     def compose(self):
         return FakeMCP()
 
@@ -103,7 +115,6 @@ class ToolRegistrationTests(unittest.TestCase):
             set(mcp.tools),
             {
                 "gui_run",
-                "gui_diagnostic",
                 "desktop_capabilities_list",
                 "desktop_shortcut_invoke",
                 "desktop_applications_list",
@@ -111,6 +122,32 @@ class ToolRegistrationTests(unittest.TestCase):
             },
         )
         self.assertNotIn("qwen_cua_predict", mcp.functions)
+        described = asyncio.run(mcp.functions["gui_run"]("describe"))
+        self.assertIsNone(described["object_ref"])
+        self.assertEqual(described["object"]["diagnostic_operations"], [])
+
+    def test_diagnostic_tool_is_registered_only_when_enabled(self):
+        mcp = self.compose()
+        with patch("mcp_autogui.adapters.providers.QwenBackendClient", return_value=Backend()):
+            mcp_autogui_main(
+                mcp,
+                recording_config=self.diagnostic_recording(),
+                run_blocking_override=direct_run_blocking,
+            )
+        self.assertIn("gui_diagnostic", mcp.tools)
+
+        audit_only = self.compose()
+        with patch("mcp_autogui.adapters.providers.QwenBackendClient", return_value=Backend()):
+            mcp_autogui_main(
+                audit_only,
+                recording_config={
+                    "audit": True,
+                    "diagnostic": False,
+                    "directory": self.recording_directory.name,
+                },
+                run_blocking_override=direct_run_blocking,
+            )
+        self.assertNotIn("gui_diagnostic", audit_only.tools)
 
     def test_desktop_shortcut_uses_the_v2_transaction(self):
         mcp = self.compose()
@@ -182,7 +219,7 @@ class ToolRegistrationTests(unittest.TestCase):
             )
 
         self.assertNotIn("omniparser_click", mcp.functions)
-        self.assertEqual(len(mcp.tools), 6)
+        self.assertEqual(len(mcp.tools), 5)
 
     def test_json_evidence_configuration_can_disable_compositor_provider(self):
         mcp = self.compose()
@@ -190,6 +227,8 @@ class ToolRegistrationTests(unittest.TestCase):
             mcp_autogui_main(
                 mcp,
                 evidence_provider_config={"compositor_window": {"enabled": False}},
+                recording_config=self.diagnostic_recording(),
+                run_blocking_override=direct_run_blocking,
             )
 
         response = asyncio.run(mcp.functions["gui_diagnostic"]("describe"))
@@ -202,6 +241,8 @@ class ToolRegistrationTests(unittest.TestCase):
             mcp_autogui_main(
                 mcp,
                 denied_actions=frozenset({ActionType.KEYBOARD_TEXT}),
+                recording_config=self.diagnostic_recording(),
+                run_blocking_override=direct_run_blocking,
             )
 
         response = asyncio.run(mcp.functions["gui_diagnostic"]("describe"))

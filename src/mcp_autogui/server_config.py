@@ -28,7 +28,7 @@ class ServerConfig:
     proposal_provider: dict[str, Any]
     deployment_denied_actions: frozenset[ActionType]
     evidence_providers: dict[str, Any]
-    audit: dict[str, Any]
+    recording: dict[str, Any]
 
     def effective_config(self) -> dict[str, Any]:
         """Return the active non-secret configuration for logs and discovery."""
@@ -48,7 +48,7 @@ class ServerConfig:
                 "denied_actions": sorted(item.value for item in self.deployment_denied_actions),
             },
             "evidence_providers": self.evidence_providers,
-            "audit": self.audit,
+            "recording": self.recording,
         }
 
 
@@ -66,7 +66,7 @@ def load_server_config(path: str | Path) -> ServerConfig:
         raw,
         {
             "schema_version", "transport", "desktop_backend", "proposal_provider",
-            "deployment", "evidence_providers", "audit",
+            "deployment", "evidence_providers", "recording",
         },
         "MCP config",
     )
@@ -120,15 +120,32 @@ def load_server_config(path: str | Path) -> ServerConfig:
     if len(denied) != len(set(denied)):
         raise ValueError("deployment.denied_actions must not contain duplicates")
     evidence_providers = _object(raw, "evidence_providers", default={})
-    audit = _object(raw, "audit", default={})
+    recording = _object(raw, "recording", default={})
     for provider_id, provider_config in evidence_providers.items():
         if not isinstance(provider_config, dict):
             raise ValueError(f"evidence_providers.{provider_id} must be an object")
         validate_evidence_provider(provider_id, provider_config, f"evidence_providers.{provider_id}")
-    _only_keys(audit, {"directory", "retention_days", "max_gib"}, "audit")
-    _optional_string(audit, "directory")
-    _optional_positive_int(audit, "retention_days")
-    _optional_positive_int(audit, "max_gib")
+    _only_keys(
+        recording,
+        {"audit", "diagnostic", "directory", "retention_days", "max_gib"},
+        "recording",
+    )
+    _optional_bool(recording, "audit")
+    _optional_bool(recording, "diagnostic")
+    _optional_string(recording, "directory")
+    _optional_positive_int(recording, "retention_days")
+    _optional_positive_int(recording, "max_gib")
+    audit_enabled = bool(recording.get("audit", False))
+    diagnostic_enabled = bool(recording.get("diagnostic", False))
+    if diagnostic_enabled and not audit_enabled:
+        raise ValueError("recording.diagnostic=true requires recording.audit=true")
+    recording = {
+        "audit": audit_enabled,
+        "diagnostic": diagnostic_enabled,
+        "directory": str(recording.get("directory") or ".autoui-audit"),
+        "retention_days": int(recording.get("retention_days") or 7),
+        "max_gib": int(recording.get("max_gib") or 16),
+    }
     return ServerConfig(
         path=config_path,
         transport_mode=mode,
@@ -140,7 +157,7 @@ def load_server_config(path: str | Path) -> ServerConfig:
         proposal_provider=proposal_provider,
         deployment_denied_actions=frozenset(denied),
         evidence_providers=evidence_providers,
-        audit=audit,
+        recording=recording,
     )
 
 

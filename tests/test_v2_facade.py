@@ -27,12 +27,13 @@ class ClickProvider:
         return None
 
 
-def facade(*, denied=frozenset(), snapshots=None):
+def facade(*, denied=frozenset(), snapshots=None, diagnostic=True):
     compositor = FakeCompositor(snapshots or [snapshot(), snapshot("s2"), snapshot("s3")])
     executor = FakeExecutor()
     provider = ClickProvider()
     runtime = CoreOrchestrator(
         compositor, executor, proposal_provider=provider, denied_actions=denied,
+        diagnostic_enabled=diagnostic,
     )
     description = RuntimeDescription.from_components(
         compositor=compositor,
@@ -55,6 +56,16 @@ MINIMAL_TASK = {
 
 
 class FacadeTests(unittest.TestCase):
+    def test_public_responses_have_no_trace_refs_when_diagnostic_is_disabled(self):
+        api, _, _, _ = facade(diagnostic=False)
+        described = api.handle("describe")
+        status = api.handle("status", task_contract=MINIMAL_TASK)
+
+        self.assertIsNone(described["object_ref"])
+        self.assertIn("object", described)
+        self.assertEqual(described["object"]["diagnostic_operations"], [])
+        self.assertIsNone(status["object_ref"])
+
     def test_description_exposes_current_operations_and_deployment_limits(self):
         api, runtime, _, _ = facade(denied=frozenset({ActionType.KEYBOARD_TEXT}))
         response = api.handle("describe")

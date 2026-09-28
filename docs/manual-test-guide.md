@@ -6,9 +6,10 @@
 
 ## 1. 范围与安全前提
 
-只测试 v2 默认路径：`gui_run`、`gui_diagnostic`、`desktop_capabilities_list`、
+默认模式测试 `gui_run`、`desktop_capabilities_list`、
 `desktop_shortcut_invoke`、`desktop_applications_list` 和
-`desktop_application_launch`。已删除的 `qwen_cua_*` 工具和
+`desktop_application_launch`；仅在 `recording.audit=true` 且
+`recording.diagnostic=true` 时测试 `gui_diagnostic`。已删除的 `qwen_cua_*` 工具和
 `omniparser_*` 直连工具不属于本计划，也不会被服务注册。
 
 在可恢复、无敏感数据的独立桌面会话中测试。不得测试支付、授权、发送消息、
@@ -31,14 +32,15 @@ actions，以及公开的 `run`、`status`、`reset` 和诊断 operation。若 c
 ## 2. 每轮需要保存的证据
 
 每个任务都使用稳定的 `task_id` 和不可变的 `task_contract`。默认响应只给出
-`object_ref`；验收时使用
+启用诊断后才记录 `object_ref`；验收时使用
 `gui_diagnostic(operation="trace", object_ref=...)` 保存所需对象和 artifact 引用。
 
 至少记录：TaskContract、snapshot/frame 引用、proposal、validation failure（若有）、
 ExecutionReceipt、Evidence、AssertionResult、TaskState、attribution 与恢复建议。
 `delivered` 仅说明输入已注入；只有 `completed` 才代表所有必要断言通过。
 
-启用 JSON `audit.directory` 时，还须保存 `ledger.csv`、JSON 对象与 `artifacts/`；审计副本用于
+启用 JSON `recording.audit` 时，还须保存 `ledger.csv` 与最小 JSON 对象；仅启用
+`recording.diagnostic` 时保存 `artifacts/`、截图、模型原文、桌面树和完整证据。审计副本用于
 事后复核，不能恢复一个正在执行的任务。`reset` 必须追加审计事件而非删除历史。
 
 ## 3. 基础事务用例
@@ -55,7 +57,7 @@ ExecutionReceipt、Evidence、AssertionResult、TaskState、attribution 与恢�
 | V2-08 | 任务完成 | 使用 `active_window.app_id` 等可独立验证的 assertion | 所有 required assertions 通过后，且仅由 Reducer 给出 `completed`。 |
 | V2-09 | 有界自动循环 | `gui_run(operation="run", max_iterations=...)` | 每轮遵循 Proposal 事务；动作序列执行后只观察、评估一次；校验失败、无进展、预算耗尽或终态时停止并返回原因。 |
 | V2-10 | 诊断与重置 | `gui_run(status/reset)`、`gui_diagnostic(trace)` | trace 可追溯对象/因果关系；reset 后同一 task 可重新开始。 |
-| V2-11 | 持久审计重启复核 | 以相同 `audit.directory` 结束一次事务后重启服务 | CSV 事件、对象和 artifact 仍可按引用读取；不要求恢复运行态。 |
+| V2-11 | 持久审计重启复核 | 以相同 `recording.directory` 结束一次事务后重启服务 | CSV 事件和最小对象仍可读取；诊断开启时 artifact 也可读取；不恢复运行态。 |
 | V2-12 | Reset 审计保留 | 对已有事件的 task 调用 `reset` | 既有事件保留，末尾追加 `task.reset`，不重写删除历史。 |
 | V2-13 | 审计保留清理 | 构造含多个 artifact 的过期对象或超容量归档 | 被清理对象及其全部 artifact 同时移除；不留下断链或孤儿。 |
 | V2-14 | 便携归档 | 在 TUI 中导出 `.tar.gz`，复制到另一台机器后打开 | `manifest.json` 校验所有成员；完整归档可浏览和导出 artifact；校验失败必须拒绝打开。 |
@@ -63,6 +65,7 @@ ExecutionReceipt、Evidence、AssertionResult、TaskState、attribution 与恢�
 | V2-16 | 状态与预算 | 分别触发不可重试校验、stale、执行失败、recoverable assertion 和 unknown evidence | 只有 stale/retryable validation 与 recoverable assertion 消耗 retries；只有准备执行的 sequence 消耗 steps。 |
 | V2-17 | 可选动作限制 | 在 `deployment.denied_actions` 禁止 Proposal 使用的 action type | 默认配置不受影响；启用后 validator 拒绝整个序列且没有输入注入。 |
 | V2-18 | 空断言结果 | 先完整送达动作，再由 provider 返回 done | 终态为 `delivered-unverified`；done 在未送达、部分送达或不确定送达后不得进入该终态。 |
+| V2-19 | 三种记录模式 | 分别关闭记录、仅开 audit、同时开 audit/diagnostic | 任务均可执行；仅审计不注册诊断且不落大对象；完整诊断可 trace；diagnostic 单独开启时报错。 |
 
 ## 4. 桌面适配器用例
 

@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from threading import RLock
-from typing import Any, Callable
+from typing import Callable
 
 from .desktop import CanonicalSnapshot
 from .evidence import AssertionResult
 from .task import TaskContract, TaskState
-from .transaction import ExecutionReceipt
+from .transaction import ActionProposal, ExecutionReceipt
 
 
 class TaskRepository:
@@ -19,8 +19,10 @@ class TaskRepository:
         self._contracts: dict[str, TaskContract] = {}
         self._states: dict[str, TaskState] = {}
         self._latest_snapshots: dict[str, CanonicalSnapshot] = {}
-        self._latest_frames: dict[str, Any] = {}
+        self._snapshots: dict[str, CanonicalSnapshot] = {}
+        self._snapshot_tasks: dict[str, str] = {}
         self._proposal_tasks: dict[str, str] = {}
+        self._proposals: dict[str, ActionProposal] = {}
         self._provider_proposals: set[str] = set()
         self._provider_finalized: set[str] = set()
         self._latest_receipts: dict[str, ExecutionReceipt] = {}
@@ -69,9 +71,11 @@ class TaskRepository:
 
     def set_snapshot(self, task_id: str, snapshot: CanonicalSnapshot) -> None:
         self._latest_snapshots[task_id] = snapshot
+        self._snapshots[snapshot.snapshot_id] = snapshot
+        self._snapshot_tasks[snapshot.snapshot_id] = task_id
 
-    def set_frame(self, task_id: str, frame: Any) -> None:
-        self._latest_frames[task_id] = frame
+    def snapshot_by_id(self, snapshot_id: str) -> CanonicalSnapshot | None:
+        return self._snapshots.get(snapshot_id)
 
     def latest_receipt(self, task_id: str) -> ExecutionReceipt | None:
         return self._latest_receipts.get(task_id)
@@ -82,13 +86,26 @@ class TaskRepository:
     def set_results(self, task_id: str, results: tuple[AssertionResult, ...]) -> None:
         self._latest_results[task_id] = results
 
-    def submit_proposal(self, task_id: str, proposal_id: str, *, provider_owned: bool = False) -> None:
+    def submit_proposal(
+        self,
+        task_id: str,
+        proposal: ActionProposal,
+        *,
+        provider_owned: bool = False,
+    ) -> None:
         with self._lock:
-            if proposal_id in self._proposal_tasks:
+            if proposal.proposal_id in self._proposal_tasks:
                 raise ValueError("proposal already submitted")
-            self._proposal_tasks[proposal_id] = task_id
+            self._proposal_tasks[proposal.proposal_id] = task_id
+            self._proposals[proposal.proposal_id] = proposal
             if provider_owned:
-                self._provider_proposals.add(proposal_id)
+                self._provider_proposals.add(proposal.proposal_id)
+
+    def proposal(self, proposal_id: str) -> ActionProposal:
+        try:
+            return self._proposals[proposal_id]
+        except KeyError as exc:
+            raise KeyError(proposal_id) from exc
 
     def task_for_proposal(self, proposal_id: str) -> str | None:
         return self._proposal_tasks.get(proposal_id)
@@ -119,13 +136,17 @@ class TaskRepository:
         self._contracts.pop(task_id, None)
         self._states.pop(task_id, None)
         self._latest_snapshots.pop(task_id, None)
-        self._latest_frames.pop(task_id, None)
         self._latest_receipts.pop(task_id, None)
         self._latest_results.pop(task_id, None)
         for proposal_id, owner in tuple(self._proposal_tasks.items()):
             if owner != task_id:
                 continue
             self._proposal_tasks.pop(proposal_id, None)
+            self._proposals.pop(proposal_id, None)
             self._provider_proposals.discard(proposal_id)
             self._provider_finalized.discard(proposal_id)
             self._terminal_receipts.pop(proposal_id, None)
+        for snapshot_id, owner in tuple(self._snapshot_tasks.items()):
+            if owner == task_id:
+                self._snapshot_tasks.pop(snapshot_id, None)
+                self._snapshots.pop(snapshot_id, None)

@@ -1,31 +1,155 @@
-"""Object-reference, ledger, and attribution bookkeeping for core transactions."""
+"""Optional audit recording that never owns or drives runtime state."""
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any
 
-from .ledger import EventLedger
 from .audit_models import (
-    Attribution, AttributionEventKind, AttributionEvidenceStatus, AttributionOwner, AttributionStage,
+    Attribution,
+    AttributionEventKind,
+    AttributionEvidenceStatus,
+    AttributionOwner,
+    AttributionStage,
+    LedgerEvent,
 )
+from .evidence import AssertionResult
+from .ledger import EventLedger
 from .protocol import ReasonCode, new_id
 from .store import ObjectStore
+from .transaction import ActionProposal
+
+
+_AUDIT_EVENTS = frozenset(
+    {
+        "task.created",
+        "proposal.created",
+        "execution.completed",
+        "assertion.evaluated",
+        "task.transitioned",
+        "attribution.recorded",
+        "task.reset",
+    }
+)
 
 
 class AuditRecorder:
-    """Record causal audit facts without participating in policy or execution."""
+    """Keep live diagnostics in memory and optionally persist selected facts."""
 
-    def __init__(self, store: ObjectStore | None = None, ledger: EventLedger | None = None) -> None:
+    def __init__(
+        self,
+        store: ObjectStore | None = None,
+        ledger: EventLedger | None = None,
+        *,
+        audit_store: ObjectStore | None = None,
+        audit_ledger: EventLedger | None = None,
+        diagnostic_enabled: bool = False,
+    ) -> None:
         self.store = store or ObjectStore()
         self.ledger = ledger or EventLedger()
+        self.audit_store = audit_store
+        self.audit_ledger = audit_ledger
+        self.diagnostic_enabled = diagnostic_enabled
         self._object_events: dict[str, str] = {}
         self._primary_attribution: dict[str, str] = {}
         self._attribution_keys: set[tuple[str, str, ReasonCode]] = set()
+        self._task_refs: dict[str, set[str]] = {}
+        self._recording_errors: list[str] = []
+        self._persisted_event_ids: set[str] = set()
+
+    @property
+    def audit_enabled(self) -> bool:
+        return self.audit_store is not None and self.audit_ledger is not None
+
+    @property
+    def recording_errors(self) -> tuple[str, ...]:
+        return tuple(self._recording_errors)
+
+    def remember(self, task_id: str, *references: str | None) -> None:
+        selected = self._task_refs.setdefault(task_id, set())
+        selected.update(reference for reference in references if reference)
+
+    def put(
+        self,
+        task_id: str,
+        value: Any,
+        *,
+        prefix: str = "object",
+        object_ref: str | None = None,
+    ) -> str:
+        reference = self.store.put(value, prefix=prefix, object_ref=object_ref)
+        self.remember(task_id, reference)
+        return reference
+
+    def put_diagnostic(
+        self,
+        value: Any,
+        *,
+        task_id: str | None = None,
+        prefix: str = "object",
+    ) -> str:
+        reference = self.store.put(value, prefix=prefix)
+        if task_id is not None:
+            self.remember(task_id, reference)
+        if self.audit_enabled and self.diagnostic_enabled:
+            try:
+                self.audit_store.put(value, object_ref=reference)
+            except Exception as exc:
+                self._recording_errors.append(f"{type(exc).__name__}: {exc}")
+        return reference
 
     def append(self, task_id: str, event_type: str, object_ref: str, **kwargs: Any):
         event = self.ledger.append(task_id, event_type, object_ref, **kwargs)
         self._object_events[object_ref] = event.event_id
+        self.remember(task_id, object_ref, *event.artifact_refs, event.debug_ref)
+        if self.audit_enabled and (
+            event_type in _AUDIT_EVENTS or self.diagnostic_enabled
+        ):
+            self._persist(event)
         return event
+
+    def _persist(self, event: LedgerEvent) -> None:
+        try:
+            value = self.store.get(event.object_ref)
+            if value is not None:
+                self.audit_store.put(
+                    self._audit_projection(value), object_ref=event.object_ref
+                )
+            artifact_refs = event.artifact_refs if self.diagnostic_enabled else ()
+            debug_ref = event.debug_ref if self.diagnostic_enabled else None
+            if self.diagnostic_enabled:
+                for reference in (*artifact_refs, debug_ref):
+                    if not reference:
+                        continue
+                    artifact = self.store.get(reference)
+                    if artifact is not None:
+                        self.audit_store.put(artifact, object_ref=reference)
+            self.audit_ledger.record(
+                replace(
+                    event,
+                    caused_by=tuple(
+                        reference
+                        for reference in event.caused_by
+                        if reference in self._persisted_event_ids
+                    ),
+                    artifact_refs=artifact_refs,
+                    debug_ref=debug_ref,
+                )
+            )
+            self._persisted_event_ids.add(event.event_id)
+        except Exception as exc:  # recording cannot invalidate a delivered action
+            self._recording_errors.append(f"{type(exc).__name__}: {exc}")
+
+    def _audit_projection(self, value: Any) -> Any:
+        if self.diagnostic_enabled:
+            return value
+        if isinstance(value, ActionProposal):
+            return replace(value, debug_ref=None)
+        if isinstance(value, AssertionResult):
+            return replace(value, evidence_refs=(), excluded_evidence=())
+        if isinstance(value, Attribution):
+            return replace(value, evidence_refs=())
+        return value
 
     def causes_for(self, object_ref: str) -> tuple[str, ...]:
         event_id = self._object_events.get(object_ref)
@@ -78,7 +202,7 @@ class AuditRecorder:
             summary=summary,
             evidence_refs=evidence_refs,
         )
-        self.store.put(attribution, object_ref=attribution.attribution_id)
+        self.put(task_id, attribution, object_ref=attribution.attribution_id)
         self._attribution_keys.add(key)
         if is_primary:
             self._primary_attribution[task_id] = attribution.attribution_id
@@ -113,3 +237,12 @@ class AuditRecorder:
         self._attribution_keys = {
             item for item in self._attribution_keys if item[0] != task_id
         }
+        references = self._task_refs.pop(task_id, set())
+        self._object_events = {
+            reference: event_id
+            for reference, event_id in self._object_events.items()
+            if reference not in references
+        }
+        for reference in references:
+            self.store.discard(reference)
+        self.ledger.clear(task_id)
