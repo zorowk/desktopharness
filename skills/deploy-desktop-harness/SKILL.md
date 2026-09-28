@@ -37,6 +37,15 @@ helpers are internal.
 DesktopHarness is started through the target checkout's `client_env.sh`; do not invoke the MCP
 binary directly, because `client_env.sh` owns the ydotool, udev, and desktop-session setup.
 
+## Treeland simulated-manual testing
+
+When the user asks to test Treeland after deployment, the **controlling AI** must read
+[`references/treeland-mcp-test-playbook.md`](references/treeland-mcp-test-playbook.md) in full and
+execute it in order through the deployed MCP endpoint. This is not a second deployment mechanism:
+the target still starts only through `client_env.sh`, while the controlling AI uses the normal MCP
+tools as a simulated human operator. Do not replace the playbook with a local runner, SSH window
+commands, or direct `treeland-debug` control.
+
 ```sh
 CUA_MODEL_API_KEY=... scripts/deploy.sh --host <ip> --user <ssh-user> \
   [--treeland-source <git-url>] [--treeland-ref <branch|tag|commit>]
