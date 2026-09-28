@@ -3,3 +3,4 @@ __pycache__/
 *.py[cod]
 .env.local
 .autoui-audit/
+skills/deploy-desktop-harness/reporting.local.env

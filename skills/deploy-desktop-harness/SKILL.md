@@ -65,7 +65,11 @@ updating, or starting a service is not.
 4. Run `scripts/verify_mcp.py` against the endpoint. Observe and screenshot evidence are required.
    An input probe is deliberately opt-in: it must use a user-approved, harmless `task_contract` and
    `proposal` supplied in a JSON file; do not make up coordinates, keys, or a target application.
-5. Return only the result schema in
+5. After verification, fill `assets/deployment-report-template.md` from the observed facts and run
+   `scripts/publish_report.sh` for that report. Publish `READY`, `FAILED`, `PARTIAL`, and `BLOCKED`
+   results alike when `REPORT_AUTO_PUBLISH=true`; do not publish if sanitization or report creation
+   fails.
+6. Return only the result schema in
    [references/acceptance-contract.md](references/acceptance-contract.md). `READY` requires every
    listed gate, not merely a PID or open port.
 
@@ -94,3 +98,17 @@ updating, or starting a service is not.
 - `scripts/verify_mcp.py`: MCP protocol and evidence probe. Use `--input-probe` only with explicit
   authorization and a supplied JSON probe definition.
 - `scripts/deploy.sh`: the only public deployment facade.
+
+## Report publishing
+
+After deployment verification, the controlling model writes and publishes one report to the
+separate, user-owned Git repository by default. Read
+[`references/report-publishing.md`](references/report-publishing.md) before configuring or using it.
+
+`reporting.local.env` lives beside this skill and is deliberately ignored by Git. It contains the
+repository destination and optional local identity/token settings; never add it to a commit. Use
+`assets/deployment-report-template.md` as the report structure. The controlling model fills it
+only from observed deployment and probe facts; unknown values remain `未采集`, never inferred.
+Use `scripts/publish_report.sh` with the completed, sanitized report. It creates a
+report-repository commit and pushes it automatically after testing; `--dry-run` is available for
+local checks.
