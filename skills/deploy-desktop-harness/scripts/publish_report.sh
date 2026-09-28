@@ -7,9 +7,22 @@ config_file="$skill_dir/reporting.local.env"
 publish=""
 report_file=""
 machine=""
+check_access=false
 
 usage() {
-  echo "usage: $0 --report /absolute/path/report.md --machine MACHINE [--publish|--dry-run]" >&2
+  echo "usage: $0 --report /absolute/path/report.md --machine MACHINE [--publish|--dry-run|--check-access]" >&2
+}
+
+git_direct() {
+  if [[ -v REPORT_GITLAB_TOKEN && -n "$REPORT_GITLAB_TOKEN" ]]; then
+    env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY \
+      -u http_proxy -u https_proxy -u all_proxy \
+      git -c credential.helper= -c http.proxy= -c https.proxy= "$@"
+    return
+  fi
+  env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY \
+    -u http_proxy -u https_proxy -u all_proxy \
+    git -c http.proxy= -c https.proxy= "$@"
 }
 
 while (($#)); do
@@ -18,6 +31,7 @@ while (($#)); do
     --machine) machine="$2"; shift 2 ;;
     --publish) publish=true; shift ;;
     --dry-run) publish=false; shift ;;
+    --check-access) check_access=true; shift ;;
     *) usage; exit 2 ;;
   esac
 done
@@ -26,11 +40,11 @@ done
   echo "missing local report configuration: $config_file" >&2
   exit 2
 }
-[[ -n "$report_file" && -f "$report_file" ]] || {
+[[ "$check_access" == true || ( -n "$report_file" && -f "$report_file" ) ]] || {
   echo "--report must name an existing regular file" >&2
   exit 2
 }
-[[ "$machine" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] || {
+[[ "$check_access" == true || "$machine" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] || {
   echo "--machine must contain only letters, digits, dot, underscore, or hyphen" >&2
   exit 2
 }
@@ -58,18 +72,19 @@ fi
   exit 2
 }
 
-report_file="$(cd "$(dirname "$report_file")" && pwd)/$(basename "$report_file")"
-
-if grep -Eqi '(authorization:[[:space:]]*bearer|private[ _-]?key|api[ _-]?key[[:space:]]*[:=]|password[[:space:]]*[:=]|token[[:space:]]*[:=])' "$report_file"; then
-  echo "report appears to contain a credential marker; sanitize it before publishing" >&2
-  exit 2
+if [[ "$check_access" == false ]]; then
+  report_file="$(cd "$(dirname "$report_file")" && pwd)/$(basename "$report_file")"
+  if grep -Eqi '(authorization:[[:space:]]*bearer|private[ _-]?key|api[ _-]?key[[:space:]]*[:=]|password[[:space:]]*[:=]|token[[:space:]]*[:=])' "$report_file"; then
+    echo "report appears to contain a credential marker; sanitize it before publishing" >&2
+    exit 2
+  fi
 fi
 
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 month="$(date -u +%Y-%m)"
 destination="reports/$month/$machine-$timestamp.md"
 
-if ! "$publish"; then
+if [[ "$check_access" == false && "$publish" == false ]]; then
   cat <<EOF
 dry run: no report-repository commit or push will be made
 repository: $REPORT_REPOSITORY
@@ -105,14 +120,20 @@ fi
 
 tmp_root="${TMPDIR:-/tmp}"
 report_worktree="$(mktemp -d "$tmp_root/desktop-harness-report.XXXXXX")"
-git clone --branch "$REPORT_BRANCH" --single-branch "$REPORT_REPOSITORY" "$report_worktree"
+git_direct clone --branch "$REPORT_BRANCH" --single-branch "$REPORT_REPOSITORY" "$report_worktree"
+
+if [[ "$check_access" == true ]]; then
+  git_direct -C "$report_worktree" push --dry-run "$REPORT_REPOSITORY" "HEAD:refs/heads/$REPORT_BRANCH"
+  echo "report repository write access confirmed"
+  exit 0
+fi
 
 mkdir -p "$(dirname "$report_worktree/$destination")"
 cp -- "$report_file" "$report_worktree/$destination"
-git -C "$report_worktree" add -- "$destination"
-git -C "$report_worktree" -c user.name="$REPORT_AUTHOR_NAME" \
+git_direct -C "$report_worktree" add -- "$destination"
+git_direct -C "$report_worktree" -c user.name="$REPORT_AUTHOR_NAME" \
   -c user.email="$REPORT_AUTHOR_EMAIL" \
   commit -m "report: add $machine deployment result"
-git -C "$report_worktree" push origin "$REPORT_BRANCH"
+git_direct -C "$report_worktree" push "$REPORT_REPOSITORY" "HEAD:refs/heads/$REPORT_BRANCH"
 
 echo "published $destination to $REPORT_REPOSITORY ($REPORT_BRANCH)"

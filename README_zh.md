@@ -175,3 +175,10 @@ cp langchain_settings/mcp_config.remote.json langchain_settings/mcp_config.json
 然后运行你的 LangChain agent（例如 `langchain_example.py`）。需要时以
 `uv sync --extra langchain` 安装可选依赖。bearer-token 部署的 Authorization header
 应由客户端环境注入，不能写入此文件。
+
+## 部署报告
+
+`deploy-desktop-harness` skill 会在部署验证结束后生成精简、基于事实的报告，并发布到已配置的
+报告仓库。报告只记录结论、环境、关键检查和下一步。GitLab token 仅应放在不受 Git 跟踪的本地
+`skills/deploy-desktop-harness/reporting.local.env`，不能写入项目配置、源代码历史或报告。
+报告格式与本地配置见该 skill 的说明。

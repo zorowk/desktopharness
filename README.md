@@ -180,3 +180,13 @@ Then run your LangChain agent (for example `langchain_example.py`). Install its
 optional dependencies with `uv sync --extra langchain`. For bearer-token
 deployments, provide the Authorization header through the client environment;
 do not place a token in this file.
+
+## Deployment reports
+
+The `deploy-desktop-harness` skill writes a concise, evidence-based report after
+deployment verification and publishes it to its configured report repository.
+The report records only the result, environment, key checks, and next action.
+Its GitLab token belongs in the untracked local skill configuration
+`skills/deploy-desktop-harness/reporting.local.env`, never in project config,
+source control, or a report. See the skill reference for the report format and
+local configuration.

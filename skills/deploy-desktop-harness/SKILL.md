@@ -65,7 +65,8 @@ updating, or starting a service is not.
 4. Run `scripts/verify_mcp.py` against the endpoint. Observe and screenshot evidence are required.
    An input probe is deliberately opt-in: it must use a user-approved, harmless `task_contract` and
    `proposal` supplied in a JSON file; do not make up coordinates, keys, or a target application.
-5. After verification, fill `assets/deployment-report-template.md` from the observed facts and run
+5. After verification, fill `assets/deployment-report-template.md` from the observed facts into a
+   local file named `<machine>-<YYYYMMDDTHHMMSSZ>.md`, then run
    `scripts/publish_report.sh` for that report. Publish `READY`, `FAILED`, `PARTIAL`, and `BLOCKED`
    results alike when `REPORT_AUTO_PUBLISH=true`; do not publish if sanitization or report creation
    fails.
