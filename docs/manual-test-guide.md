@@ -47,7 +47,7 @@ ExecutionReceipt、Evidence、AssertionResult、TaskState、attribution 与恢�
 
 | ID | 场景 | 操作 | 通过标准 |
 | --- | --- | --- | --- |
-| V2-01 | 观察与协议发现 | `gui_run(describe)`、`gui_diagnostic(observe)` | 返回 canonical snapshot；Treeland 原始树只以 artifact 引用存在。 |
+| V2-01 | 协议发现 | `gui_run(describe)` | 显示 transport auth mode、静态 `denied_actions` 与 recording mode，且不含密钥。完整诊断模式另以 `gui_diagnostic(observe)` 返回 canonical snapshot；Treeland 原始树只以 artifact 引用存在。 |
 | V2-02 | 人工提案无副作用 | `gui_diagnostic(observe/propose/prepare)`，不执行 | Proposal 含一个或多个有序 canonical action；prepare 不持久化 PreparedProposal，且未产生输入副作用。 |
 | V2-03 | Qwen Proposal | `gui_diagnostic(propose)`（不传 proposal） | 一次 Qwen 输出被解析为一个 Proposal，多个 `tool_call` 保序收纳；原始输出仅出现在 `debug_ref`。 |
 | V2-04 | 有效动作 | `gui_diagnostic(prepare/execute/evaluate)` | prepare/recheck 通过后产生真实回执；回执与任务状态分离。 |

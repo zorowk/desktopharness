@@ -1,4 +1,4 @@
-# AutoUI MCP v2.1 项目评分卡
+# AutoUI MCP v2.2 项目评分卡
 
 本文件定义 AutoUI MCP 的固定评估标准。它用于每次重要 release、架构调整和真实桌面
 回归完成后复评；分数是工程决策辅助，不替代安全验收或任务证据。
@@ -34,12 +34,12 @@
 
 | # | 维度 | 权重 | 核心问题与满分标准 |
 | --- | --- | ---: | --- |
-| 1 | 架构边界清晰度 | 10 | Compositor、Proposal、Policy、Executor、Evidence、Evaluator、Reducer 各只回答一个问题；没有跨层决策或 God Object。 |
+| 1 | 架构边界清晰度 | 10 | Compositor、ProposalValidator、Executor、Evidence、Evaluator、Reducer 各只回答一个问题；没有跨层决策或 God Object。 |
 | 2 | 核心独立性 | 10 | `core/` 只依赖协议与 ports，不依赖特定 compositor、桌面、模型或输入实现。建议每次执行 `rg -n -i 'treeland\|deepin\|qwen\|pyautogui\|dde-am' src/mcp_autogui/core`。 |
 | 3 | Canonical Model 质量 | 8 | 字段最小、稳定、语义明确、支持 unknown，能被多种 compositor 映射；不是原生树的改名副本。 |
 | 4 | 扩展性 | 8 | 新 compositor、provider、模型或启动方式主要新增 adapter 与 fixture；Core 改动趋近零。记录 Extension Core Touch Ratio。 |
 | 5 | 状态与事实正确性 | 10 | `claim`、`evidence`、`assertion_result`、`execution_receipt`、`task_state` 严格分离；unknown、冲突和过期不会被伪造为结论。 |
-| 6 | 安全与策略模型 | 10 | 机械权限、任务授权和语义风险分层；unknown 默认确认；模型不能扩大权限；平台动作不旁路事务。统计 false allow、false reject 与 safe refusal。 |
+| 6 | 执行安全与部署约束 | 10 | 注入前参数、能力、坐标、目标和 stale 重检始终存在；模型不能绕过事务；部署可显式限制 canonical action。统计误完成、错误拒绝与安全停止，不以语义审批层数计分。 |
 | 7 | 可验证性与可测试性 | 10 | adapter fixture、port 契约、gate/evaluator/reducer 纯函数测试和稳定错误码测试齐全；真实环境回归补足单测盲区。 |
 | 8 | 故障归因能力 | 8 | 失败能给出 stage、owner、code、evidence 状态和因果链。统计 Root Cause Resolution Rate。 |
 | 9 | Agent 鲁棒性 | 8 | 对 stale snapshot、遮挡、目标变化、重复动作、过早 DONE、provider 不可用、无进展有安全恢复或停止。统计恢复成功率。 |
@@ -52,7 +52,7 @@
 每次 release 至少记录：
 
 - 单元、fixture、契约和真实桌面测试的数量与结果；错误码覆盖和关键状态转换覆盖。
-- 任务成功率、False Completion Rate、Unsafe Action Rate、平均步骤、延迟、token/截图/MCP
+- 任务成功率、False Completion Rate、人工介入率、平均步骤、延迟、模型调用、token/截图/MCP
   payload 成本。
 - Root Cause Resolution Rate、Repeated Action Detection、No Progress Detection 和 Recovery
   Success Rate。
@@ -67,7 +67,7 @@ v2.2 重构前 S0 基线对应 commit `ce57a7d4f212cc1084a7e35598fba90803ac6292`
 `144 passed, 24 subtests passed`。当前会话是 TTY，`treeland-debug --json tree` 无输出并超时，
 因此真实桌面成功率、误报完成、人工介入、模型调用数和耗时仍未测量。
 
-运行时代码相对上次评分仍为 v2.1；本次只建立重构基线，没有用新增测试数量重新计算架构分数。
+运行时代码已进入 v2.2 重构；S0 只建立基线，没有用新增测试数量重新计算架构分数。
 以下 83.7 分保留为历史评分，不能当作 v2.2 实施完成后的评分。
 
 ## 上次完整评分（历史）

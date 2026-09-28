@@ -11,8 +11,6 @@ import base64
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
-import requests
-
 from ...core.facts import STANDARD_FACT_PATHS
 from ...core.models import (
     AssertionSpec,
@@ -37,7 +35,7 @@ class OmniParserEvidenceProvider:
         capture_png: Callable[[], bytes],
         artifact_store: ObjectStore,
         *,
-        request_post: Callable[..., Any] = requests.post,
+        request_post: Callable[..., Any] | None = None,
         timeout_s: float = 15.0,
     ) -> None:
         if not endpoint:
@@ -50,7 +48,7 @@ class OmniParserEvidenceProvider:
         self.endpoint = base_url.rstrip("/") + "/parse/"
         self.capture_png = capture_png
         self.artifact_store = artifact_store
-        self.request_post = request_post
+        self.request_post = request_post or _requests_post()
         self.timeout_s = timeout_s
 
     def collect(
@@ -103,7 +101,6 @@ class OmniParserEvidenceProvider:
                     )
                 )
         return tuple(records)
-
     @classmethod
     def _requested_control_locators(
         cls, assertions: Sequence[AssertionSpec]
@@ -189,3 +186,14 @@ class OmniParserEvidenceProvider:
             quality=EvidenceConfidence.PROBABILISTIC,
             artifact_ref=artifact_ref,
         )
+
+
+def _requests_post() -> Callable[..., Any]:
+    """Load the optional HTTP client only when OmniParser is configured."""
+    try:
+        import requests
+    except ImportError as exc:
+        raise RuntimeError(
+            "OmniParser requires the optional dependency; install with 'uv sync --extra omniparser'"
+        ) from exc
+    return requests.post

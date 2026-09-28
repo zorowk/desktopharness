@@ -1,12 +1,12 @@
 {
   "mcpServers": {
     "mcp_machine_01": {
-      "transport": "sse",
-      "url": "http://TEST_MACHINE_1_IP:8000/sse"
+      "transport": "streamable-http",
+      "url": "http://TEST_MACHINE_1_IP:8651/mcp"
     },
     "mcp_machine_02": {
-      "transport": "sse",
-      "url": "http://TEST_MACHINE_2_IP:8000/sse"
+      "transport": "streamable-http",
+      "url": "http://TEST_MACHINE_2_IP:8651/mcp"
     }
   }
 }

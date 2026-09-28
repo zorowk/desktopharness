@@ -76,7 +76,39 @@ class FacadeTests(unittest.TestCase):
             ["describe", "evaluate", "execute", "observe", "prepare", "propose", "trace"],
         )
         self.assertEqual(description["deployment"]["denied_actions"], ["keyboard.text"])
+        self.assertEqual(
+            description["transport"],
+            {"mode": "unconfigured", "auth": {"mode": "unconfigured"}},
+        )
         self.assertNotIn("policy_profiles", description)
+
+    def test_description_exposes_only_public_transport_configuration(self):
+        compositor = FakeCompositor([snapshot()])
+        description = RuntimeDescription.from_components(
+            compositor=compositor,
+            executor=FakeExecutor(),
+            proposal_provider=None,
+            frame_provider=None,
+            evidence_providers=(),
+            denied_actions=(),
+            context_strategies={"compact"},
+            transport={
+                "mode": "streamable-http",
+                "host": "127.0.0.1",
+                "port": 8651,
+                "auth": {"mode": "bearer-token", "token": "must-not-leak"},
+            },
+        ).to_dict()
+        self.assertEqual(
+            description["transport"],
+            {
+                "mode": "streamable-http",
+                "host": "127.0.0.1",
+                "port": 8651,
+                "auth": {"mode": "bearer-token"},
+            },
+        )
+        self.assertNotIn("must-not-leak", str(description))
 
     def test_removed_confirm_operation_is_rejected(self):
         api, _, _, _ = facade()

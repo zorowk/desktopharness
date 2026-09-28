@@ -9,8 +9,9 @@ command. Ensure `treeland-debug` is available in the MCP server's `PATH`.
 
 ## AutoUI v2 generic transaction core
 
-The server now also registers the compositor-neutral `gui_run` lifecycle facade
-and the explicit `gui_diagnostic` inspection facade. Its core depends only on
+The server registers the compositor-neutral `gui_run` lifecycle facade. When
+full recording diagnostics are explicitly enabled, it also registers the
+`gui_diagnostic` inspection facade. Its core depends only on
 canonical models and replaceable ports; Treeland,
 Qwen-CUA, PyAutoGUI, Deepin keybindings, and `dde-am` are adapters selected by
 the application composition root.
@@ -101,7 +102,10 @@ The embedded service keeps each prediction pending and commits it to Qwen
 history only after receiving the actual local execution result. Success,
 partial execution, rejection, and failure are fed back explicitly.
 
-OmniParser is disabled by default. When enabled, it is a read-only v2 Evidence/Grounding Provider: it registers no legacy direct-execution tools and cannot bypass Proposal validation, Receipt, or Assertion processing.
+OmniParser is disabled by default. When enabled, it is a read-only v2
+Evidence/Grounding Provider: it registers no legacy direct-execution tools and
+cannot bypass Proposal validation, Receipt, or Assertion processing. Install
+its optional HTTP dependency before enabling it: `uv sync --extra omniparser`.
 
 Start with the [documentation index](docs/README.md). Manual acceptance and repeatable tests are defined in the [AutoUI MCP v2 manual acceptance and regression plan](docs/manual-test-guide.md).
 
@@ -132,9 +136,10 @@ cd treeland-aitests
 uv sync
 ```
 
-## Remote Deployment + LangChain Agent Connection (SSE)
+## Remote Deployment + LangChain Agent Connection
 
-Run the MCP server on a **test machine** and connect from another machine via SSE.
+Run the MCP server on a **test machine** and connect from another machine via
+streamable HTTP.
 
 ### 1) Test machine (run MCP server)
 
@@ -160,12 +165,14 @@ Edit `langchain_settings/mcp_config.json`:
 {
   "mcpServers": {
     "mcp_machine_01": {
-      "transport": "sse",
-      "url": "http://TEST_MACHINE_1_IP:8000/sse"
+      "transport": "streamable-http",
+      "url": "http://TEST_MACHINE_1_IP:8651/mcp"
     }
   }
 }
 ```
 
-Then run your LangChain agent (for example `langchain_example.py`) to connect via SSE.
-(If you want ``langchain_example.py`` to work, ``uv sync --extra langchain`` instead.)
+Then run your LangChain agent (for example `langchain_example.py`). Install its
+optional dependencies with `uv sync --extra langchain`. For bearer-token
+deployments, provide the Authorization header through the client environment;
+do not place a token in this file.

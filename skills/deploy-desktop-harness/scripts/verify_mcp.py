@@ -45,6 +45,15 @@ def tool(endpoint: str, name: str, arguments: dict) -> dict:
     return call(endpoint, "tools/call", {"name": name, "arguments": arguments})
 
 
+def tool_names(endpoint: str) -> set[str]:
+    result = call(endpoint, "tools/list", {}).get("result", {})
+    tools = result.get("tools", []) if isinstance(result, dict) else []
+    return {
+        item["name"] for item in tools
+        if isinstance(item, dict) and isinstance(item.get("name"), str)
+    }
+
+
 def structured(value: dict) -> dict:
     """Accept both FastMCP structuredContent and JSON text content responses."""
     result = value.get("result", {})
@@ -68,7 +77,7 @@ def run_input_probe(endpoint: str, probe: dict) -> tuple[bool, str]:
         raise RuntimeError("input proposal did not return an object_ref")
     executed = structured(tool(endpoint, "gui_diagnostic", {
         "operation": "execute", "task_id": probe["task_contract"]["task_id"],
-        "proposal_id": proposal_id, "confirmed": True,
+        "proposal_id": proposal_id,
     }))
     if executed.get("status") != "running":
         raise RuntimeError("input action was not delivered")
@@ -84,8 +93,8 @@ def main() -> int:
         help="Approved JSON with task_contract and proposal",
     )
     args = parser.parse_args()
-    result = {"endpoint": args.endpoint, "mcp_reachable": False, "observe": False,
-              "screenshot": False, "pointer": False, "keyboard": False}
+    result = {"endpoint": args.endpoint, "mcp_reachable": False, "diagnostics_enabled": False,
+              "observe": False, "screenshot": False, "pointer": False, "keyboard": False}
     try:
         call(args.endpoint, "initialize", {
             "protocolVersion": "2025-06-18",
@@ -94,19 +103,23 @@ def main() -> int:
         })
         tool(args.endpoint, "gui_run", {"operation": "describe"})
         result["mcp_reachable"] = True
-        contract = {"task_id": "provision-observe", "goal": "Read the current desktop only.",
-                    "permissions": {"actions": []}, "limits": {"max_steps": 1, "max_retries": 0}}
-        observed = structured(
-            tool(
-                args.endpoint,
-                "gui_diagnostic",
-                {"operation": "observe", "task_contract": contract},
+        result["diagnostics_enabled"] = "gui_diagnostic" in tool_names(args.endpoint)
+        if result["diagnostics_enabled"]:
+            contract = {"task_id": "provision-observe", "goal": "Read the current desktop only.",
+                        "limits": {"max_steps": 1, "max_retries": 0}}
+            observed = structured(
+                tool(
+                    args.endpoint,
+                    "gui_diagnostic",
+                    {"operation": "observe", "task_contract": contract},
+                )
             )
-        )
-        result["observe"] = observed.get("status") == "ok" and bool(observed.get("object"))
-        # A successful observe response is the server's supported screenshot/frame evidence probe.
-        result["screenshot"] = result["observe"]
+            result["observe"] = observed.get("status") == "ok" and bool(observed.get("object"))
+            # A successful observe response is the server's supported screenshot/frame evidence probe.
+            result["screenshot"] = result["observe"]
         if args.input_probe:
+            if not result["diagnostics_enabled"]:
+                raise ValueError("--input-probe requires recording.diagnostic=true")
             probes = json.loads(args.input_probe.read_text(encoding="utf-8")).get("probes", [])
             if not isinstance(probes, list) or len(probes) != 2:
                 raise ValueError("input probe must contain exactly two approved probes")
@@ -126,7 +139,11 @@ def main() -> int:
         print(json.dumps(result, ensure_ascii=False))
         return 1
     print(json.dumps(result, ensure_ascii=False))
-    return 0 if result["mcp_reachable"] and result["observe"] and result["screenshot"] else 1
+    if not result["mcp_reachable"]:
+        return 1
+    if result["diagnostics_enabled"] and not (result["observe"] and result["screenshot"]):
+        return 1
+    return 0
 
 
 if __name__ == "__main__":

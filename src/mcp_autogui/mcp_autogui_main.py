@@ -84,6 +84,7 @@ def mcp_autogui_main(
         denied_actions=denied_actions,
         context_strategies=ContextBuilder.STRATEGIES,
         effective_config=effective_config,
+        transport=(effective_config or {}).get("transport"),
         recording={
             "audit": recording.audit_enabled,
             "diagnostic": recording.diagnostic_enabled,

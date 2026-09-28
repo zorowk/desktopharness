@@ -6,6 +6,7 @@ import json
 import asyncio
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.sse import sse_client
+from mcp.client.streamable_http import streamablehttp_client
 from mcp.client.stdio import stdio_client, get_default_environment
 from langchain_mcp import MCPToolkit
 
@@ -52,9 +53,10 @@ class McpManager:
 
         try:
             sse_url = _build_sse_url()
-            use_sse = target.get('transport') == 'sse'
+            transport = target.get('transport', 'stdio')
+            use_remote = transport in {'sse', 'streamable-http'}
 
-            if use_sse:
+            if use_remote:
                 proc = None
                 try:
                     if 'command' in target and target['command']:
@@ -71,7 +73,7 @@ class McpManager:
                         )
 
                     if sse_url is None:
-                        raise ValueError('SSE transport requires "url".')
+                        raise ValueError(f'{transport} transport requires "url".')
 
                     connect_timeout_s = target.get('connect_timeout_s', 30)
                     poll_s = 0.5
@@ -81,13 +83,22 @@ class McpManager:
                         if self.is_exit:
                             break
                         try:
-                            async with sse_client(
-                                sse_url,
-                                headers=target.get('headers'),
-                                timeout=target.get('timeout', 5),
-                                sse_read_timeout=target.get('sse_read_timeout', 300),
-                            ) as (read, write):
-                                await _run_session(read, write)
+                            if transport == 'sse':
+                                async with sse_client(
+                                    sse_url,
+                                    headers=target.get('headers'),
+                                    timeout=target.get('timeout', 5),
+                                    sse_read_timeout=target.get('sse_read_timeout', 300),
+                                ) as (read, write):
+                                    await _run_session(read, write)
+                            else:
+                                async with streamablehttp_client(
+                                    sse_url,
+                                    headers=target.get('headers'),
+                                    timeout=target.get('timeout', 5),
+                                    sse_read_timeout=target.get('sse_read_timeout', 300),
+                                ) as (read, write, _get_session_id):
+                                    await _run_session(read, write)
                             return
                         except Exception as exc:
                             last_exc = exc

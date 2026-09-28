@@ -10,7 +10,7 @@
 
 ## 当前状态与执行约定
 
-S1、S2、S3 已在当前工作区完成：领域 schema version 为 `2`，运行描述 revision 为 `2.2`，JSON 配置 schema 为 `2`。
+S1、S2、S3、S4 已在当前工作区完成：领域 schema version 为 `2`，运行描述 revision 为 `2.2`，JSON 配置 schema 为 `2`。
 默认执行链已改为 ProposalValidator prepare/recheck，不再包含语义审批、任务权限或确认分支。
 TaskRepository 是运行态所有者；记录默认关闭，诊断工具只在 audit 与 diagnostic 同时启用时注册。
 真实 Treeland/Deepin 验收尚未完成。
@@ -27,7 +27,7 @@ TaskRepository 是运行态所有者；记录默认关闭，诊断工具只在 a
 | S1 | 统一当前协议，删除旧兼容入口 | 已实施；自动回归通过，真实模型/桌面未测 |
 | S2 | 轻量校验执行链，删除审批框架 | 已实施；自动回归通过，真实模型/桌面未测 |
 | S3 | 单一运行态、精简记录及诊断解耦 | 已实施；自动回归通过，真实模型/桌面未测 |
-| S4 | 默认依赖、配置、文档与示例收敛 | 待实施 |
+| S4 | 默认依赖、配置、文档与示例收敛 | 已实施；自动回归通过，真实模型/桌面未测 |
 | S5 | 全量回归、真实桌面验收及版本交付 | 待实施 |
 
 ## 必须保留的能力
@@ -201,6 +201,14 @@ Proposal、实际回执、断言、状态转换及精简失败归因；完整诊
 
 **验收**：最小安装可启动服务；示例可运行；代码、配置、describe、README 和部署脚本一致；
 无需要用户填写 permissions 或 policy_overrides 才能执行普通任务的示例。
+
+**S4 记录（2026-09-28）**：LangChain/Google 示例依赖与 OmniParser HTTP 客户端均移至
+optional extras；默认安装仅保留当前 MCP、嵌入式 Qwen、桌面后端所需依赖。OmniParser 仅在
+启用时导入 `requests`，并在缺少 extra 时给出安装提示。远程 LangChain 示例改为与默认服务一致的
+streamable-HTTP `/mcp` 端点；describe 明确输出过滤后的 transport/auth、静态动作限制和
+recording 模式。部署验证默认只调用 `gui_run(describe)`，视觉和输入探针要求显式诊断配置，且
+不再发送 legacy permissions、policy override 或确认字段。自动回归为 `127 tests passed`；真实
+最小安装、LangChain 远程连接和 Treeland 桌面验收仍待 S5。
 
 ## S5：回归与交付
 

@@ -10,6 +10,14 @@ Report one failed phase and its safe, concrete reason when a gate cannot be met:
 `DESKTOPHARNESS_RUNNING`, `MCP_REACHABLE`, `DESKTOP_OBSERVE_WORKS`, `SCREENSHOT_WORKS`, and
 `INPUT_WORKS`.
 
+The default AutoUI configuration intentionally does not register
+`gui_diagnostic`. The deployment verifier therefore always proves MCP reachability
+through `gui_run(operation="describe")`; it performs observe, screenshot, and
+opt-in input probes only with a separate test configuration that enables both
+`recording.audit` and `recording.diagnostic`. Probe task contracts must contain
+only `task_id`, `goal`, assertions when needed, and limits—never legacy
+permissions, policy overrides, confirmation fields, or secrets.
+
 Do not include credentials, private keys, tokens, raw environment dumps, or application content in
 the report.
 

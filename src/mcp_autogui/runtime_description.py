@@ -34,6 +34,7 @@ class RuntimeDescription:
         context_strategies: Iterable[str],
         effective_config: Mapping[str, Any] | None = None,
         recording: Mapping[str, Any] | None = None,
+        transport: Mapping[str, Any] | None = None,
     ) -> RuntimeDescription:
         descriptor = compositor.descriptor
         description = {
@@ -64,6 +65,7 @@ class RuntimeDescription:
             "deployment": {
                 "denied_actions": sorted(str(getattr(item, "value", item)) for item in denied_actions),
             },
+            "transport": _public_transport(transport),
             "recording": to_primitive(
                 recording or {"audit": False, "diagnostic": False}
             ),
@@ -86,3 +88,17 @@ def _component_id(component: object | None, attribute: str) -> str | None:
     if component is None:
         return None
     return str(getattr(component, attribute, type(component).__name__))
+
+
+def _public_transport(transport: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Expose only connection mode data; tokens and unrelated settings stay private."""
+    source = transport or {}
+    auth = source.get("auth") if isinstance(source.get("auth"), Mapping) else {}
+    result = {"mode": str(source.get("mode") or "unconfigured"), "auth": {
+        "mode": str(auth.get("mode") or "unconfigured"),
+    }}
+    if "host" in source:
+        result["host"] = str(source["host"])
+    if "port" in source:
+        result["port"] = source["port"]
+    return result

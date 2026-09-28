@@ -8,8 +8,9 @@
 
 ## AutoUI v2 通用事务内核
 
-服务现在默认注册跨合成器的 `gui_run` facade。核心只依赖 Canonical Model
-和可替换 port；Treeland、Qwen-CUA、PyAutoGUI 都位于 adapter 层，不进入核心。
+服务默认注册跨合成器的 `gui_run` facade；只有显式开启完整记录诊断时才注册
+`gui_diagnostic`。核心只依赖 Canonical Model 和可替换 port；Treeland、Qwen-CUA、
+PyAutoGUI 都位于 adapter 层，不进入核心。
 Treeland/Deepin 桌面后端还可选提供 Deepin 快捷键和基于 `dde-am` 的应用启动能力。
 
 v2 公开调用流程为：
@@ -47,12 +48,12 @@ export CUA_MODEL_API_KEY=your-model-api-key   # 模型端点不校验时可省�
 
 1. `gui_run(operation="run", task_contract={"task_id": ..., "goal": ...,
    "limits": {"max_steps": 5, "max_retries": 2}})`
-   执行有界的单动作事务循环：
+   执行有界 Proposal 事务循环：
    observe -> propose（Qwen）-> prepare -> recheck -> execute ->
    evaluate -> 归约任务状态，直到任务阻塞或终止。
 2. 需要细粒度控制时使用 `gui_diagnostic`：`observe`、`propose`、`prepare`、
    `execute`、`evaluate`、`trace`；`status` 和 `reset` 仍属于 `gui_run`。
-   响应默认只返回对象引用；传 `diagnostic=true` 或使用 `trace` 展开
+   仅在 `recording.audit=true` 和 `recording.diagnostic=true` 时注册；它可展开
    存储对象，例如模型输出（`debug_ref`）、执行回执或断言结果。
 3. `gui_run(operation="reset", task_id=...)` 会重置运行时任务和内嵌
    Qwen session，用于开始新任务。
@@ -93,6 +94,7 @@ OmniParser 默认关闭；启用后仅作为 v2 的只读 Evidence/Grounding Pro
 校验、Receipt 或 Assertion 流程：
 
 在 JSON 的 `evidence_providers.omniparser` 中设置 `enabled: true` 和 `endpoint` 即可启用。
+启用前需要安装它的可选 HTTP 依赖：`uv sync --extra omniparser`。
 
 当前文档从 [文档导航](docs/README.md) 开始；手工验收和重复测试步骤见
 [AutoUI MCP v2 手工验收与回归计划](docs/manual-test-guide.md)。
@@ -133,9 +135,9 @@ cd treeland-aitests
 uv sync
 ```
 
-## 远程部署 + LangChain Agent 连接（SSE）
+## 远程部署 + LangChain Agent 连接
 
-在**测试机**上运行 MCP 服务，并在**控制机**通过 SSE 连接。
+在**测试机**上运行 MCP 服务，并在**控制机**通过 streamable HTTP 连接。
 
 ### 1) 测试机（运行 MCP 服务）
 
@@ -160,12 +162,13 @@ cp langchain_settings/mcp_config.remote.json langchain_settings/mcp_config.json
 {
   "mcpServers": {
     "mcp_machine_01": {
-      "transport": "sse",
-      "url": "http://TEST_MACHINE_1_IP:8000/sse"
+      "transport": "streamable-http",
+      "url": "http://TEST_MACHINE_1_IP:8651/mcp"
     }
   }
 }
 ```
 
-然后运行你的 LangChain agent（例如 `langchain_example.py`）通过 SSE 连接。
-（如果要运行 `langchain_example.py`，请改用 `uv sync --extra langchain`。）
+然后运行你的 LangChain agent（例如 `langchain_example.py`）。需要时以
+`uv sync --extra langchain` 安装可选依赖。bearer-token 部署的 Authorization header
+应由客户端环境注入，不能写入此文件。

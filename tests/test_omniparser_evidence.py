@@ -1,4 +1,6 @@
+import sys
 import unittest
+from unittest.mock import patch
 
 from mcp_autogui.adapters.evidence.omniparser import OmniParserEvidenceProvider
 from mcp_autogui.core.models import AssertionSpec
@@ -85,3 +87,10 @@ class OmniParserEvidenceTests(unittest.TestCase):
         )
 
         self.assertEqual(records, ())
+
+    def test_optional_http_dependency_is_required_only_when_provider_is_enabled(self):
+        with patch.dict(sys.modules, {"requests": None}):
+            with self.assertRaisesRegex(RuntimeError, "--extra omniparser"):
+                OmniParserEvidenceProvider(
+                    "parser.example:8000", lambda: b"png", ObjectStore()
+                )
