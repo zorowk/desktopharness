@@ -35,9 +35,22 @@ def call(endpoint: str, method: str, params: dict) -> dict:
     )
     with _direct_opener.open(request, timeout=12) as response:  # explicit user-supplied endpoint
         _session_id = response.headers.get("Mcp-Session-Id", _session_id)
-        value = json.loads(response.read().decode())
+        value = _decode_mcp_response(response.read().decode())
     if not isinstance(value, dict) or "error" in value:
         raise RuntimeError(str(value.get("error", value)))
+    return value
+
+
+def _decode_mcp_response(payload: str) -> dict:
+    """Accept JSON and the single-message SSE responses used by FastMCP."""
+    stripped = payload.strip()
+    if stripped.startswith("data:") or "\ndata:" in stripped:
+        stripped = "\n".join(
+            line[5:].lstrip() for line in stripped.splitlines() if line.startswith("data:")
+        )
+    value = json.loads(stripped)
+    if not isinstance(value, dict):
+        raise ValueError("MCP response is not an object")
     return value
 
 

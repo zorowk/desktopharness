@@ -128,6 +128,10 @@ an `Authorization: Bearer ...` header from every client.
 
 ## Installation
 
+Package SemVer is independent from the v2.2 architecture revision. This
+breaking pre-1.0 release is package version `0.2.0`; the domain and JSON
+configuration schema versions remain `2`.
+
 1. Please do the following:
 
 ```

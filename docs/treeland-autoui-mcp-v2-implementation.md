@@ -28,7 +28,7 @@ TaskRepository 是运行态所有者；记录默认关闭，诊断工具只在 a
 | S2 | 轻量校验执行链，删除审批框架 | 已实施；自动回归通过，真实模型/桌面未测 |
 | S3 | 单一运行态、精简记录及诊断解耦 | 已实施；自动回归通过，真实模型/桌面未测 |
 | S4 | 默认依赖、配置、文档与示例收敛 | 已实施；自动回归通过，真实模型/桌面未测 |
-| S5 | 全量回归、真实桌面验收及版本交付 | 待实施 |
+| S5 | 全量回归、真实桌面验收及版本交付 | 进行中；自动、只读 smoke 及部分真实输入任务已验证，完整矩阵未完成 |
 
 ## 必须保留的能力
 
@@ -223,6 +223,18 @@ recording 模式。部署验证默认只调用 `gui_run(describe)`，视觉和�
 **完成条件**：自动回归通过、真实任务有记录、核心功能无退化、普通操作无逐步权限审查、
 显式动作限制与诊断仍可用、文档和配置可直接使用；S0 能力矩阵逐项对照，无第二套执行链和状态权威来源。
 任何未测项明确列出，不标记为通过。
+
+**S5 当前记录（2026-09-28）**：`uv run --with pytest pytest -q` 通过
+`131 passed, 27 subtests passed`；`unittest discover` 通过 `127 tests`；compileall、
+`git diff --check` 与 `uv lock --check` 通过。pytest 首次暴露 `tests/` 缺少包标记，已补充
+`tests/__init__.py`，并修复原本只适用于 JSON 响应的 smoke/部署验证器，使其先初始化
+streamable-HTTP MCP session、绕过本机代理并解析 FastMCP 的 SSE 响应。真实服务的
+`treeland-debug --json tree`、`autoui-smoke`、`gui_run(describe)` 与无输入部署验证均已通过；
+默认 recording 模式如预期未注册 diagnostic。已执行编辑器启动、低风险快捷键、两个 Qwen 任务和
+htop 启动；其中 Qwen 键盘编辑任务及恢复任务 failed，且没有被误报为 completed。完整细节见
+[`s5-validation-report.md`](s5-validation-report.md)。assertion/失败矩阵、LangChain 远程连接或完整
+S0 任务集仍未完成，不能标记 S5 完成。包 SemVer 选择不与
+架构 revision 绑定，版本升为 `0.2.0`；领域和 JSON schema 保持 `2`，运行 revision 保持 `2.2`。
 
 ## 验证命令与进度记录
 

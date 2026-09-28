@@ -127,6 +127,9 @@ codex mcp add desktop_harness_mcp --url http://127.0.0.1:8651/mcp
 
 ## 安装
 
+包的 SemVer 不与 v2.2 架构 revision 绑定。当前含破坏性变更的 pre-1.0 发布版本为
+`0.2.0`；领域与 JSON 配置 schema 仍为 `2`。
+
 1. 请执行以下命令：
 
 ```

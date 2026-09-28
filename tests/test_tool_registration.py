@@ -212,7 +212,10 @@ class ToolRegistrationTests(unittest.TestCase):
 
     def test_omniparser_configuration_registers_no_legacy_execution_tools(self):
         mcp = self.compose()
-        with patch("mcp_autogui.adapters.providers.QwenBackendClient", return_value=Backend()):
+        with patch("mcp_autogui.adapters.providers.QwenBackendClient", return_value=Backend()), patch(
+            "mcp_autogui.adapters.evidence.omniparser._requests_post",
+            return_value=lambda *_args, **_kwargs: None,
+        ):
             mcp_autogui_main(
                 mcp,
                 evidence_provider_config={"omniparser": {"enabled": True, "endpoint": "parser.example:8000"}},

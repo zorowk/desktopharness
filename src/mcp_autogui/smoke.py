@@ -7,9 +7,12 @@ import json
 import shutil
 import subprocess
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.request import ProxyHandler, Request, build_opener
 
 from .server_config import load_server_config
+
+
+_DIRECT_OPENER = build_opener(ProxyHandler({}))
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -58,22 +61,29 @@ def _default_mcp_url(transport: dict[str, object]) -> str:
 
 
 def _mcp_describe_check(endpoint: str) -> dict[str, object]:
-    payload = {
+    initialization = {
         "jsonrpc": "2.0",
-        "id": "autoui-smoke-describe",
-        "method": "tools/call",
-        "params": {"name": "gui_run", "arguments": {"operation": "describe"}},
+        "id": "autoui-smoke-initialize",
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": {"name": "autoui-smoke", "version": "2"},
+        },
     }
-    request = Request(
-        endpoint,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Accept": "application/json, text/event-stream", "Content-Type": "application/json"},
-        method="POST",
-    )
     try:
-        with urlopen(request, timeout=10) as response:  # noqa: S310 -- endpoint is explicit config
-            response_payload = json.loads(response.read().decode("utf-8"))
-    except (HTTPError, URLError, TimeoutError, json.JSONDecodeError) as exc:
+        _, session_id = _mcp_request(endpoint, initialization)
+        response_payload, _ = _mcp_request(
+            endpoint,
+            {
+                "jsonrpc": "2.0",
+                "id": "autoui-smoke-describe",
+                "method": "tools/call",
+                "params": {"name": "gui_run", "arguments": {"operation": "describe"}},
+            },
+            session_id=session_id,
+        )
+    except (HTTPError, URLError, TimeoutError, ValueError, json.JSONDecodeError) as exc:
         return {"ok": False, "endpoint": endpoint, "reason": f"{type(exc).__name__}: {exc}"}
     if not isinstance(response_payload, dict):
         return {"ok": False, "endpoint": endpoint, "reason": "MCP response is not an object"}
@@ -84,3 +94,34 @@ def _mcp_describe_check(endpoint: str) -> dict[str, object]:
     if not isinstance(result, dict) or result.get("isError") is True:
         return {"ok": False, "endpoint": endpoint, "reason": "gui_run(describe) was rejected"}
     return {"ok": True, "endpoint": endpoint}
+
+
+def _mcp_request(
+    endpoint: str, payload: dict[str, object], *, session_id: str | None = None
+) -> tuple[dict[str, object], str | None]:
+    headers = {"Accept": "application/json, text/event-stream", "Content-Type": "application/json"}
+    if session_id:
+        headers["Mcp-Session-Id"] = session_id
+    request = Request(
+        endpoint,
+        data=json.dumps(payload).encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+    with _DIRECT_OPENER.open(request, timeout=10) as response:  # noqa: S310 -- endpoint is explicit config
+        value = _decode_mcp_response(response.read().decode("utf-8"))
+        received_session = response.headers.get("Mcp-Session-Id")
+    if not isinstance(value, dict):
+        raise ValueError("MCP response is not an object")
+    return value, received_session if isinstance(received_session, str) else None
+
+
+def _decode_mcp_response(payload: str) -> dict[str, object]:
+    """Decode either a JSON response or FastMCP's single-message SSE response."""
+    stripped = payload.strip()
+    if stripped.startswith("data:") or "\ndata:" in stripped:
+        data = "\n".join(
+            line[5:].lstrip() for line in stripped.splitlines() if line.startswith("data:")
+        )
+        return json.loads(data)
+    return json.loads(stripped)
