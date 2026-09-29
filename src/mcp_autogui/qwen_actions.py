@@ -5,6 +5,7 @@ from typing import Any, Callable
 
 
 ALLOWED_PYAUTOGUI_CALLS = {
+    "sleep",
     "click",
     "doubleClick",
     "tripleClick",
@@ -73,7 +74,7 @@ def _parse_statement(
     statement_index: int,
 ) -> dict[str, Any]:
     if not isinstance(statement, ast.Expr) or not isinstance(statement.value, ast.Call):
-        raise ValueError("Only direct pyautogui calls and time.sleep are allowed")
+        raise ValueError("Only direct allowlisted pyautogui calls are allowed")
     call = statement.value
     namespace, function = _call_name(call.func)
     if namespace == "pyautogui":

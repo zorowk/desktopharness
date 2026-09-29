@@ -9,9 +9,11 @@ transaction protocol cannot represent.
 from __future__ import annotations
 
 
-# Actions exposed in the model-facing ``computer_use`` schema.  Waiting is a
-# controller concern (new observation / bounded retry), not a v2 input action.
+# Actions exposed in the model-facing ``computer_use`` schema.  ``wait`` is a
+# bounded controller action: it consumes the normal step budget and is followed
+# by a fresh observation.
 COMPUTER_USE_ACTIONS = (
+    "wait",
     "key",
     "key_down",
     "key_up",
@@ -51,6 +53,7 @@ V2_PARSED_QWEN_ACTIONS = frozenset(
         "write",
         "mouseDown",
         "mouseUp",
+        "sleep",
         "done",
     }
 )

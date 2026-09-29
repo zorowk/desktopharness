@@ -11,6 +11,7 @@ from .protocol import ReasonCode, SCHEMA_VERSION
 
 
 class ActionType(StrEnum):
+    WAIT = "wait"
     POINTER_MOVE = "pointer.move"
     POINTER_CLICK = "pointer.click"
     POINTER_DOUBLE_CLICK = "pointer.double_click"

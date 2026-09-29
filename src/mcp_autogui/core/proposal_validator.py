@@ -158,6 +158,8 @@ class ProposalValidator:
             return False
         if "button" in params and params["button"] not in {"left", "middle", "right"}:
             return False
+        if action.type == ActionType.WAIT:
+            return number(params.get("seconds")) and 0 <= params["seconds"] <= 5
         if action.type == ActionType.POINTER_CLICK:
             return (
                 params.get("event") in {None, "down", "up"}

@@ -22,6 +22,7 @@ from ...qwen_action_registry import V2_PARSED_QWEN_ACTIONS
 
 
 _ACTION_TYPES = {
+    "sleep": ActionType.WAIT,
     "moveTo": ActionType.POINTER_MOVE,
     "click": ActionType.POINTER_CLICK,
     "rightClick": ActionType.POINTER_CLICK,
@@ -224,7 +225,9 @@ def canonical_action_from_parsed(
         desktop_point = None
 
     parameters: dict[str, Any] = {}
-    if action_type in {ActionType.POINTER_CLICK, ActionType.POINTER_DOUBLE_CLICK, ActionType.POINTER_DRAG}:
+    if action_type == ActionType.WAIT:
+        parameters = {"seconds": args[0] if args else kwargs.get("seconds", 1)}
+    elif action_type in {ActionType.POINTER_CLICK, ActionType.POINTER_DOUBLE_CLICK, ActionType.POINTER_DRAG}:
         parameters = {key: kwargs[key] for key in ("button", "duration") if key in kwargs}
         if source_type == "rightClick":
             parameters.setdefault("button", "right")

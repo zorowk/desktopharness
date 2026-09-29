@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import time
 from typing import Any
 
 from ...core.models import (
@@ -81,7 +82,9 @@ class PyAutoGUIExecutor:
         params = dict(action.parameters)
         if action.coordinate is not None and point is None:
             raise ValueError("coordinate mapping did not return a point")
-        if action.type == ActionType.POINTER_MOVE:
+        if action.type == ActionType.WAIT:
+            time.sleep(params["seconds"])
+        elif action.type == ActionType.POINTER_MOVE:
             self._module.moveTo(point.x, point.y, duration=params.get("duration", 0))
         elif action.type == ActionType.POINTER_CLICK:
             event = params.get("event")

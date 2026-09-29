@@ -150,23 +150,39 @@ class EmbeddedAgentTests(unittest.TestCase):
                 coordinate_type="relative",
             )
 
-    def test_parse_s2_rejects_wait_not_supported_by_v2(self):
+    def test_parse_s2_maps_bounded_wait_to_controller_action(self):
         response = (
             "Action: Wait\n<tool_call>"
             '{"name":"computer_use","arguments":{"action":"wait","time":1}}'
             "</tool_call>"
         )
-        with self.assertRaisesRegex(ValueError, "Unsupported"):
+        _, actions = parse_s2_response(
+            response,
+            original_size=(100, 100),
+            processed_size=(96, 96),
+            coordinate_type="relative",
+        )
+
+        self.assertEqual(actions, ["pyautogui.sleep(1)"])
+
+    def test_system_prompt_advertises_bounded_wait(self):
+        prompt = build_system_prompt("relative", (992, 800))
+        self.assertIn('"wait"', prompt)
+        self.assertIn("between 0 and 5", prompt)
+
+    def test_parse_s2_rejects_wait_over_five_seconds(self):
+        response = (
+            "Action: Wait\n<tool_call>"
+            '{"name":"computer_use","arguments":{"action":"wait","time":6}}'
+            "</tool_call>"
+        )
+        with self.assertRaisesRegex(ValueError, "between 0 and 5"):
             parse_s2_response(
                 response,
                 original_size=(100, 100),
                 processed_size=(96, 96),
                 coordinate_type="relative",
             )
-
-    def test_system_prompt_does_not_advertise_wait(self):
-        prompt = build_system_prompt("relative", (992, 800))
-        self.assertNotIn('"wait"', prompt)
 
     def test_system_prompt_requires_positioning_before_scroll(self):
         prompt = build_system_prompt("relative", (992, 800))

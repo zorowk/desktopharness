@@ -2,6 +2,7 @@ import unittest
 
 from mcp_autogui.adapters.executor.pyautogui import PyAutoGUIExecutor
 from mcp_autogui.core.models import Action, ActionProposal, ActionType, Point, new_id
+from unittest.mock import patch
 
 
 class RecordingPyAutoGUI:
@@ -13,6 +14,16 @@ class RecordingPyAutoGUI:
 
 
 class PyAutoGUIExecutorTests(unittest.TestCase):
+    def test_wait_uses_bounded_controller_sleep(self):
+        action = Action(ActionType.WAIT, parameters={"seconds": 0.5})
+        proposal = ActionProposal(new_id("proposal"), "test", "snapshot-1", (action,))
+
+        with patch("mcp_autogui.adapters.executor.pyautogui.time.sleep") as sleep:
+            receipt = PyAutoGUIExecutor(RecordingPyAutoGUI()).execute(proposal)
+
+        self.assertEqual(receipt.status.value, "delivered")
+        sleep.assert_called_once_with(0.5)
+
     def test_drag_uses_calibrated_default_duration(self):
         module = RecordingPyAutoGUI()
         action = Action(ActionType.POINTER_DRAG, Point(20, 30), "desktop-logical")

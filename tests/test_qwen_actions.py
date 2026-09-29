@@ -48,6 +48,12 @@ class QwenActionTests(unittest.TestCase):
 
         self.assertEqual([action["type"] for action in actions], ["write", "press"])
 
+    def test_parse_accepts_bounded_controller_sleep_shape(self):
+        actions = parse_qwen_actions(["pyautogui.sleep(0.5)"])
+
+        self.assertEqual(actions[0]["type"], "sleep")
+        self.assertEqual(actions[0]["args"], [0.5])
+
     def test_parse_rejects_arbitrary_python(self):
         with self.assertRaises(ValueError):
             parse_qwen_actions(["import os; os.system('false')"])

@@ -362,6 +362,9 @@ def _computer_use_to_actions(
     if action in {"scroll", "hscroll"}:
         pixels = _bounded_number(arguments.get("pixels", 0), -100000, 100000, "pixels")
         return [f"pyautogui.{action}({pixels})"]
+    if action == "wait":
+        seconds = _bounded_number(arguments.get("time", 1), 0, 5, "wait time")
+        return [f"pyautogui.sleep({seconds})"]
     if action == "terminate":
         return ["FAIL" if str(arguments.get("status", "success")).lower() == "failure" else "DONE"]
     raise AssertionError(f"Unhandled registered Qwen action: {action}")

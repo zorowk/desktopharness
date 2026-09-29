@@ -8,6 +8,10 @@ from ..qwen_action_registry import COMPUTER_USE_ACTIONS
 
 
 ACTION_DESCRIPTION = """
+* `wait`: Pause briefly for a visible interface transition, then let the
+  controller capture a fresh screenshot. The time must be between 0 and 5
+  seconds. Use this only when the latest screenshot shows that an application
+  or dialog is still loading.
 * `key`: Press one key, or a shortcut when multiple keys are provided.
 * `key_down`: Press and hold the specified keys.
 * `key_up`: Release the specified keys in reverse order.
@@ -33,8 +37,9 @@ ACTION_DESCRIPTION = """
 
 DESCRIPTION_TEMPLATE = """Use a mouse and keyboard to interact with a desktop GUI.
 * Applications are opened by interacting with visible desktop UI.
-* Do not wait. If the interface may still be changing, choose a supported next
-  action only when it is visible; otherwise terminate with failure.
+* Use a single short `wait` only when the latest screenshot visibly shows an
+  application or dialog still loading. Never combine `wait` with speculative
+  actions that depend on the future interface.
 {resolution_info}
 * Consult the latest screenshot before choosing a coordinate.
 * Aim at the visible center of a control unless the task explicitly requires an edge.
