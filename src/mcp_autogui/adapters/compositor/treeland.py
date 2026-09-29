@@ -5,6 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 import hashlib
 import json
+import re
 import subprocess
 from collections.abc import Callable
 from typing import Any
@@ -110,16 +111,67 @@ def read_treeland_tree(timeout: float = 35) -> dict[str, Any]:
     return value
 
 
+def read_wlr_outputs(timeout: float = 5) -> tuple[OutputFact, ...]:
+    """Read enabled Wayland outputs from wlr-randr without changing their state."""
+    result = subprocess.run(
+        ["wlr-randr"],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+    return parse_wlr_randr_outputs(result.stdout)
+
+
+def parse_wlr_randr_outputs(output: str) -> tuple[OutputFact, ...]:
+    """Parse the stable human-readable wlr-randr layout report.
+
+    wlr-randr reports mode dimensions in physical pixels and positions in the
+    compositor's logical layout.  Canonical snapshots also use logical
+    coordinates, so dimensions are divided by the advertised output scale.
+    """
+    entries = re.split(r"(?m)^(?=\S)", output.strip())
+    outputs: list[OutputFact] = []
+    for entry in entries:
+        lines = entry.splitlines()
+        if not lines:
+            continue
+        header = lines[0]
+        output_id = header.split(maxsplit=1)[0]
+        enabled = "(enabled)" in header or bool(re.search(r"(?mi)^\s*Enabled:\s*yes\s*$", entry))
+        mode = re.search(r"(?mi)^\s*(\d+)x(\d+)\s+px,.*\(current\)", entry)
+        position = re.search(r"(?mi)^\s*Position:\s*(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)\s*$", entry)
+        scale_match = re.search(r"(?mi)^\s*Scale:\s*([0-9]+(?:\.[0-9]+)?)\s*$", entry)
+        if not enabled or mode is None or position is None:
+            continue
+        scale = float(scale_match.group(1)) if scale_match is not None else 1.0
+        if scale <= 0:
+            continue
+        outputs.append(
+            OutputFact(
+                output_id,
+                Rect(
+                    float(position.group(1)), float(position.group(2)),
+                    float(mode.group(1)) / scale, float(mode.group(2)) / scale,
+                ),
+                scale,
+            )
+        )
+    return tuple(outputs)
+
+
 class TreelandAdapter:
     def __init__(
         self,
         tree_reader: Callable[[], dict[str, Any]] = read_treeland_tree,
         cursor_reader: Callable[[], Any] | None = None,
         artifact_store: ObjectStore | None = None,
+        output_reader: Callable[[], tuple[OutputFact, ...]] = read_wlr_outputs,
     ) -> None:
         self._tree_reader = tree_reader
         self._cursor_reader = cursor_reader
         self._artifacts = artifact_store or ObjectStore()
+        self._output_reader = output_reader
         self._latest: CanonicalSnapshot | None = None
 
     @property
@@ -168,8 +220,18 @@ class TreelandAdapter:
         """Normalize an already captured tree without performing another transport read."""
         raw = deepcopy(raw_tree)
         canonical_source = deepcopy(raw)
-        bounds = self._bounds(canonical_source)
-        raw_ref = self._artifacts.put(raw, prefix="treeland-tree")
+        fallback_bounds = self._bounds(canonical_source)
+        try:
+            outputs = self._output_reader()
+        except (OSError, subprocess.SubprocessError):
+            outputs = ()
+        if not outputs:
+            outputs = (OutputFact("desktop", fallback_bounds, None),)
+        bounds = _bounds_from_outputs(outputs)
+        raw_ref = self._artifacts.put(
+            {"tree": raw, "outputs": [_output_primitive(item) for item in outputs]},
+            prefix="treeland-snapshot",
+        )
         windows: list[CanonicalWindowFact] = []
         occurrences: dict[str, int] = {}
         for raw_window in flatten_treeland_windows(canonical_source):
@@ -204,6 +266,7 @@ class TreelandAdapter:
             )
         environment_payload = {
             "bounds": [bounds.x, bounds.y, bounds.width, bounds.height],
+            "outputs": [_output_primitive(item) for item in outputs],
             "windows": [
                 [w.window_id, w.app_id, w.title, w.geometry.x, w.geometry.y, w.geometry.width, w.geometry.height,
                  w.visible, w.active, w.z_index, w.workspace_id, w.output_id, w.role.value]
@@ -221,7 +284,7 @@ class TreelandAdapter:
             captured_at=utc_now(),
             environment_version=environment_version,
             coordinate_space=CoordinateSpace("desktop-logical", bounds, geometry_version),
-            outputs=(OutputFact("desktop", bounds, None),),
+            outputs=outputs,
             cursor=cursor,
             windows=tuple(windows),
             raw_artifact_ref=raw_ref,
@@ -275,6 +338,25 @@ class TreelandAdapter:
     def _bounds(tree: dict[str, Any]) -> Rect:
         value = desktop_bounds_from_treeland(tree)
         return Rect(value["x"], value["y"], value["width"], value["height"])
+
+
+def _bounds_from_outputs(outputs: tuple[OutputFact, ...]) -> Rect:
+    min_x = min(item.geometry.x for item in outputs)
+    min_y = min(item.geometry.y for item in outputs)
+    max_x = max(item.geometry.x + item.geometry.width for item in outputs)
+    max_y = max(item.geometry.y + item.geometry.height for item in outputs)
+    return Rect(min_x, min_y, max_x - min_x, max_y - min_y)
+
+
+def _output_primitive(output: OutputFact) -> dict[str, float | str | None]:
+    return {
+        "output_id": output.output_id,
+        "x": output.geometry.x,
+        "y": output.geometry.y,
+        "width": output.geometry.width,
+        "height": output.geometry.height,
+        "scale": output.scale,
+    }
 
 
 def _optional_text(value: Any) -> str | None:

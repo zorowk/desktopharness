@@ -5,12 +5,15 @@ from unittest.mock import patch
 from mcp_autogui.adapters.compositor.treeland import (
     desktop_bounds_from_treeland,
     flatten_treeland_windows,
+    parse_wlr_randr_outputs,
     read_treeland_tree,
+    read_wlr_outputs,
 )
 from mcp_autogui.coordinate_mapping import (
     desktop_to_screenshot_point,
     screenshot_to_desktop_point,
 )
+from mcp_autogui.core.models import Rect
 
 
 class CoordinateMappingTests(unittest.TestCase):
@@ -46,6 +49,37 @@ class TreelandTreeParserTests(unittest.TestCase):
             text=True,
             timeout=35,
         )
+
+    def test_wlr_randr_reader_discovers_enabled_outputs(self):
+        report = '''eDP-1 "Laptop" (enabled)
+  Modes:
+    1920x1080 px, 60.000000 Hz (current)
+  Position: 0,0
+  Scale: 1.000000
+HDMI-A-1 "External" (enabled)
+  Modes:
+    2560x1440 px, 59.950001 Hz (current)
+  Position: 1920,0
+  Scale: 1.250000
+DP-2 "Disconnected" (disabled)
+  Enabled: no
+'''
+        with patch(
+            "mcp_autogui.adapters.compositor.treeland.subprocess.run",
+            return_value=CompletedProcess(args=["wlr-randr"], returncode=0, stdout=report, stderr=""),
+        ) as run:
+            outputs = read_wlr_outputs()
+
+        self.assertEqual([(item.output_id, item.geometry, item.scale) for item in outputs], [
+            ("eDP-1", Rect(0, 0, 1920, 1080), 1.0),
+            ("HDMI-A-1", Rect(1920, 0, 2048, 1152), 1.25),
+        ])
+        run.assert_called_once_with(
+            ["wlr-randr"], check=True, capture_output=True, text=True, timeout=5,
+        )
+
+    def test_wlr_randr_parser_ignores_incomplete_outputs(self):
+        self.assertEqual(parse_wlr_randr_outputs('DP-1 "Unknown" (enabled)\n  Enabled: yes\n'), ())
 
     def test_desktop_bounds_include_background_bounding_rect_and_dock(self):
         tree = {
