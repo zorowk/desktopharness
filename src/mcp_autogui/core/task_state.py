@@ -63,12 +63,15 @@ class TaskStateReducer:
             status = TaskStatus.FAILED
             retries = state.retries
         elif recoverable_failures:
-            if state.retries < contract.limits.max_retries:
-                status = TaskStatus.RETRYING
-                retries = state.retries + 1
-            else:
-                status = TaskStatus.FAILED
-                retries = state.retries
+            # A postcondition that is not true *yet* is the normal state of a
+            # multi-step GUI task.  It must not consume the validation retry
+            # budget on every observation; otherwise max_retries=1 permits
+            # only two proposals even when max_steps is 10.  Keep planning in
+            # recovery mode until the action-step budget is exhausted.  The
+            # retry counter remains reserved for retryable validation failures
+            # (for example a target moving between observation and injection).
+            status = TaskStatus.RETRYING
+            retries = state.retries
         elif unresolved:
             status = TaskStatus.RUNNING
             retries = state.retries

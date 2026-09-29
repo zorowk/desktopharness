@@ -43,6 +43,23 @@ class ContextBuilder:
             for assertion in contract.assertions
             if assertion.assertion_id not in state.completed_assertions
         )
+        # Assertion IDs alone are not actionable for a visual agent.  In
+        # particular, a task whose success is signalled by a window title must
+        # tell the agent both the title and that it must be *active*.  Keep the
+        # complete, controller-authoritative requirement in the projection so
+        # the provider can plan a final verification/focus step rather than
+        # merely executing the prose goal.
+        completion_requirements = tuple(
+            {
+                "assertion_id": assertion.assertion_id,
+                "path": assertion.path,
+                "operator": assertion.operator,
+                "expected": assertion.expected,
+                "required": assertion.required,
+            }
+            for assertion in contract.assertions
+            if assertion.assertion_id in pending
+        )
         feedback = tuple(
             {
                 "assertion_id": result.assertion_id,
@@ -72,6 +89,7 @@ class ContextBuilder:
                 "ordered_action_sequence": True,
                 "observe_after_proposal": True,
                 "remaining_steps": max(0, contract.limits.max_steps - state.step),
+                "completion_requirements": completion_requirements,
             },
             ledger_event_refs=tuple(event.event_id for event in projected_events),
             spatial_projection=spatial_projection or {},

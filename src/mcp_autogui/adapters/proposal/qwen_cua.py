@@ -167,8 +167,17 @@ class QwenCUAProposalProvider:
             "primary_attribution": context.primary_attribution,
             "projection_limits": context.projection_limits,
         }
-        return "Use the screenshot and this controller context. Return one proposal.\n" + json.dumps(
-            to_primitive(projection), ensure_ascii=False
+        return (
+            "Use the screenshot and this controller context. Return one proposal.\n"
+            "The completion_requirements are controller-authoritative: do not "
+            "terminate successfully, or treat the GUI sequence as finished, until "
+            "the latest screenshot and spatial_projection show every required "
+            "condition. For an active_window.title requirement, make the window "
+            "whose visible title matches expected active after completing the "
+            "requested interaction; if it is not active, use a visible GUI action "
+            "to focus it before terminating. Re-check this after every action and "
+            "prioritize this finalization when remaining_steps is low.\n"
+            + json.dumps(to_primitive(projection), ensure_ascii=False)
         )
 
 

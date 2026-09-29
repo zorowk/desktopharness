@@ -9,6 +9,7 @@ from mcp_autogui.core.models import (
     new_id, utc_now,
 )
 from mcp_autogui.core.orchestrator import CoreOrchestrator
+from mcp_autogui.core.evidence import AssertionResult, AssertionStatus
 from mcp_autogui.core.proposal_validator import PreparedProposal, ProposalValidator, ValidationFailure
 from mcp_autogui.core.task_state import TaskStateReducer
 
@@ -171,6 +172,24 @@ class TaskStateReducerTests(unittest.TestCase):
         state = reducer.validation_failure(contract(), TaskState("task-1"), retryable=False)
         self.assertEqual((state.status, state.retries), (TaskStatus.FAILED, 0))
         self.assertEqual(reducer.execution_failure(TaskState("task-1")).status, TaskStatus.FAILED)
+
+    def test_recoverable_postcondition_uses_step_budget_not_retry_budget(self):
+        reducer = TaskStateReducer()
+        task = TaskContract(
+            "task-1", "test", limits=TaskLimits(max_steps=3, max_retries=1),
+            assertions=(AssertionSpec("pass", "active_window.title", "contains", "PASS"),),
+        )
+        failed = AssertionResult(
+            "pass", task.assertions[0], AssertionStatus.FAILED, (), utc_now(), "not yet"
+        )
+
+        first = reducer.reduce(task, TaskState("task-1", step=1), (failed,))
+        second = reducer.reduce(task, TaskState("task-1", step=2), (failed,))
+        exhausted = reducer.reduce(task, TaskState("task-1", step=3), (failed,))
+
+        self.assertEqual((first.status, first.retries), (TaskStatus.RETRYING, 0))
+        self.assertEqual((second.status, second.retries), (TaskStatus.RETRYING, 0))
+        self.assertEqual(exhausted.status, TaskStatus.FAILED)
 
 
 class OrchestratorTests(unittest.TestCase):
