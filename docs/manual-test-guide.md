@@ -6,10 +6,10 @@
 
 ## 1. 范围与安全前提
 
-默认模式测试 `gui_run`、`desktop_capabilities_list`、
-`desktop_shortcut_invoke`、`desktop_applications_list` 和
-`desktop_application_launch`；仅在 `recording.audit=true` 且
-`recording.diagnostic=true` 时测试 `gui_diagnostic`。已删除的 `qwen_cua_*` 工具和
+随包 `config/mcp-autoui.json` 开启 `recording.audit` 与 `recording.diagnostic`，因此测试
+`gui_run`、`gui_diagnostic`、`desktop_capabilities_list`、`desktop_shortcut_invoke`、
+`desktop_applications_list` 与 `desktop_application_launch`。把两者关闭后仍测试 `gui_run`
+与 desktop 工具，但 `gui_diagnostic` 不注册。已删除的 `qwen_cua_*` 工具和
 `omniparser_*` 直连工具不属于本计划，也不会被服务注册。
 
 在可恢复、无敏感数据的独立桌面会话中测试。不得测试支付、授权、发送消息、
@@ -31,8 +31,9 @@ actions，以及公开的 `run`、`status`、`reset` 和诊断 operation。若 c
 
 ## 2. 每轮需要保存的证据
 
-每个任务都使用稳定的 `task_id` 和不可变的 `task_contract`。默认响应只给出
-启用诊断后才记录 `object_ref`；验收时使用
+每个任务都使用稳定的 `task_id` 和不可变的 `task_contract`。普通响应只给出紧凑任务状态；
+`object_ref` 与 `gui_diagnostic` 只在 `recording.audit=true` 且 `recording.diagnostic=true`
+时存在（随包配置即该模式）；验收时使用
 `gui_diagnostic(operation="trace", object_ref=...)` 保存所需对象和 artifact 引用。
 
 至少记录：TaskContract、snapshot/frame 引用、proposal、validation failure（若有）、

@@ -161,9 +161,13 @@ runtime store/ledger，记录失败不会让已送达的 action 变为失败。
 
 | `recording.audit` | `recording.diagnostic` | 行为 |
 | --- | --- | --- |
-| false | false | 默认；只保留进程内运行态，不注册 `gui_diagnostic` |
+| false | false | 只保留进程内运行态，不注册 `gui_diagnostic` |
 | true | false | 持久化最小任务、proposal、receipt、断言与事件投影；不保存详细诊断材料 |
 | true | true | 额外持久化诊断对象/工件，并注册 `gui_diagnostic` |
+
+随包配置 `config/mcp-autoui.json` 采用 `true` / `true`：桌面验收需要只在该模式注册的
+observe 与 screenshot 证据。三种模式的组合都可运行，`false` / `false` 时服务只暴露
+`gui_run`。
 
 `diagnostic=true` 且 `audit=false` 是配置错误。审计文件由 JSON object store 与 CSV ledger
 保存，受目录、保留天数和大小上限控制；reset 会清除该任务的内存引用，不会让运行态从审计

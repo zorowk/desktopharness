@@ -9,9 +9,10 @@ command. Ensure `treeland-debug` is available in the MCP server's `PATH`.
 
 ## AutoUI v2 generic transaction core
 
-The server registers the compositor-neutral `gui_run` lifecycle facade. When
-full recording diagnostics are explicitly enabled, it also registers the
-`gui_diagnostic` inspection facade. Its core depends only on
+The server registers the compositor-neutral `gui_run` lifecycle facade. The
+shipped configuration enables full recording diagnostics, which additionally
+registers the `gui_diagnostic` inspection facade; a deployment that turns that
+mode off exposes `gui_run` alone. Its core depends only on
 canonical models and replaceable ports; Treeland,
 Qwen-CUA, PyAutoGUI, Deepin keybindings, and `dde-am` are adapters selected by
 the application composition root.
@@ -78,7 +79,9 @@ Raw-action restriction is opt-in and disabled in the default configuration:
 }
 ```
 
-Recording is also disabled by default. Audit-only mode keeps the minimal task,
+Recording, unlike raw-action restriction, is enabled in the shipped
+`config/mcp-autoui.json` so the diagnostic and screenshot probes are
+available. Audit-only mode keeps the minimal task,
 proposal, receipt, assertion, and transition history without screenshots, raw
 model output, desktop trees, or full evidence. Diagnostic mode requires audit:
 

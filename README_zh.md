@@ -8,9 +8,9 @@
 
 ## AutoUI v2 通用事务内核
 
-服务默认注册跨合成器的 `gui_run` facade；只有显式开启完整记录诊断时才注册
-`gui_diagnostic`。核心只依赖 Canonical Model 和可替换 port；Treeland、Qwen-CUA、
-PyAutoGUI 都位于 adapter 层，不进入核心。
+服务注册跨合成器的 `gui_run` facade；随包配置开启完整记录诊断，因此同时注册
+`gui_diagnostic`，关闭该模式的部署只暴露 `gui_run`。核心只依赖 Canonical Model 和可替换
+port；Treeland、Qwen-CUA、PyAutoGUI 都位于 adapter 层，不进入核心。
 Treeland/Deepin 桌面后端还可选提供 Deepin 快捷键和基于 `dde-am` 的应用启动能力。
 
 v2 公开调用流程为：
@@ -66,8 +66,9 @@ export CUA_MODEL_API_KEY=your-model-api-key   # 模型端点不校验时可省�
 }
 ```
 
-记录功能默认关闭。仅审计模式只保存任务、Proposal、实际回执、断言与状态转换，
-不保存截图、模型原文、完整桌面树或完整证据；诊断模式必须依赖审计：
+记录功能在随包配置 `config/mcp-autoui.json` 中开启，以便使用诊断与截图探针。仅审计模式只保存
+任务、Proposal、实际回执、断言与状态转换，不保存截图、模型原文、完整桌面树或完整证据；
+诊断模式必须依赖审计：
 
 ```json
 "recording": {
@@ -102,8 +103,9 @@ OmniParser 默认关闭；启用后仅作为 v2 的只读 Evidence/Grounding Pro
 ## Codex 连接
 
 服务端配置见 [`config/mcp-autoui.json`](config/mcp-autoui.json)，字段说明和可复制模板见
-[`config/mcp-autoui.example.json`](config/mcp-autoui.example.json)。通过 JSON 的
-`desktop_backend.kind` 选择桌面后端；当前唯一可选值是 `treeland-deepin`。启动时传入：
+[`config/mcp-autoui.example.json`](config/mcp-autoui.example.json)。随包配置开启
+`recording.audit` 与 `recording.diagnostic`，模板为了最小化落地保留两者关闭，按需自行启用。
+通过 JSON 的 `desktop_backend.kind` 选择桌面后端；当前唯一可选值是 `treeland-deepin`。启动时传入：
 
 ```bash
 uv run treeland-autogui-mcp --config config/mcp-autoui.json
