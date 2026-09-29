@@ -142,7 +142,7 @@ class CoreOrchestrator:
         )
         return snapshot
 
-    def propose(self, task_id: str, *, strategy: str = "compact") -> ActionProposal:
+    def propose(self, task_id: str, *, strategy: str = "compact", intent: str = "") -> ActionProposal:
         if self.proposal_provider is None:
             raise OperationFailure(
                 ReasonCode.CAPABILITY_UNAVAILABLE,
@@ -165,7 +165,7 @@ class CoreOrchestrator:
                 artifact_refs=(frame.image_ref,),
             )
         context = self.context_builder.build(
-            contract,
+            replace(contract, goal=intent.strip()) if intent.strip() else contract,
             state,
             self.ledger.events(task_id),
             based_on_snapshot=snapshot.snapshot_id,
@@ -531,10 +531,10 @@ class CoreOrchestrator:
         self,
         task_id: str,
         *,
-        strategy: str = "compact",
+        strategy: str = "compact", intent: str = "",
     ) -> dict[str, Any]:
         self.observe(task_id)
-        proposal = self.propose(task_id, strategy=strategy)
+        proposal = self.propose(task_id, strategy=strategy, intent=intent)
         has_done = proposal.actions[-1].type == ActionType.DONE
         executable = any(action.type != ActionType.DONE for action in proposal.actions)
         if not executable:
@@ -628,7 +628,7 @@ class CoreOrchestrator:
         task_id: str,
         *,
         strategy: str = "compact",
-        max_iterations: int | None = None,
+        max_iterations: int | None = None, intent: str = "",
     ) -> dict[str, Any]:
         """Run bounded Proposal transactions until the task blocks or terminates."""
         contract = self._require_task(task_id)
@@ -645,7 +645,7 @@ class CoreOrchestrator:
             before = set(self._tasks.state(task_id).completed_assertions)
             before_plan_step = self._tasks.state(task_id).plan_step
             try:
-                outcome = self.run_step(task_id, strategy=active_strategy)
+                outcome = self.run_step(task_id, strategy=active_strategy, intent=intent)
             except Exception as exc:
                 # The Qwen adapter attaches a diagnostic reference when its
                 # response violates the single-action protocol.  Re-observe

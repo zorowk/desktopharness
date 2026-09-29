@@ -395,7 +395,9 @@ class OrchestratorTests(unittest.TestCase):
 
         self.assertEqual(outcome["state"].status, TaskStatus.DELIVERED_UNVERIFIED)
         self.assertEqual(outcome["state"].plan_step, 1)
-        self.assertEqual(provider.goals, ["Open the editor.", "Enter the text."])
+        self.assertEqual(provider.goals, [
+            "Open and edit a document.", "Open and edit a document.",
+        ])
         self.assertEqual(provider.resets, ["task-1"])
         self.assertTrue(any(
             event.event_type == "task.plan_step_advanced"

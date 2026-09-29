@@ -94,10 +94,7 @@ class ContextBuilder:
             task_id=contract.task_id,
             based_on_snapshot=based_on_snapshot,
             frame=frame,
-            goal=(
-                contract.steps[state.plan_step]
-                if contract.steps else contract.goal
-            ),
+            goal=contract.goal,
             current_step=state.step,
             pending_assertions=pending,
             recent_execution_receipt=(to_primitive(recent_receipt) if recent_receipt else None),

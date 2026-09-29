@@ -104,6 +104,7 @@ def mcp_autogui_main(
         proposal_id: str = '',
         strategy: str = 'compact',
         max_iterations: int | None = None,
+        intent: str = '',
     ) -> dict:
         """运行紧凑任务生命周期；task_contract 可含由 MCP 依次推进的 steps。"""
         return await run_blocking(
@@ -114,6 +115,7 @@ def mcp_autogui_main(
             proposal_id=proposal_id,
             strategy=strategy,
             max_iterations=max_iterations,
+            intent=intent,
         )
 
     if recording.diagnostic_enabled:

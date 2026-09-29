@@ -123,6 +123,7 @@ class AutoUIFacade:
         proposal_id: str = "",
         strategy: str = "compact",
         max_iterations: int | None = None,
+        intent: str = "",
     ) -> dict[str, Any]:
         if operation == "describe":
             description = self._description()
@@ -145,6 +146,7 @@ class AutoUIFacade:
                 resolved_task,
                 strategy=strategy,
                 max_iterations=max_iterations,
+                intent=intent,
             )
             ref = (
                 self.runtime.store_runtime_object(
