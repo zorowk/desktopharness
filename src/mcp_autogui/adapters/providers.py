@@ -11,7 +11,12 @@ from ..provider_registry import (
     register_proposal_provider,
 )
 from ..qwen_backend import QwenBackendClient
-from .evidence import AtSpiEvidenceProvider, CompositorWindowEvidenceProvider, OmniParserEvidenceProvider
+from .evidence import (
+    AtSpiEvidenceProvider,
+    CompositorWindowEvidenceProvider,
+    OmniParserEvidenceProvider,
+    WlClipboardEvidenceProvider,
+)
 from .proposal import QwenCUAProposalProvider
 
 
@@ -19,6 +24,7 @@ def register_builtin_providers() -> None:
     register_proposal_provider("qwen-cua", _validate_qwen, _build_qwen)
     register_evidence_provider("compositor_window", _validate_enabled, _build_compositor_window)
     register_evidence_provider("atspi", _validate_enabled, _build_atspi)
+    register_evidence_provider("wl_clipboard", _validate_enabled, _build_wl_clipboard)
     register_evidence_provider("omniparser", _validate_omniparser, _build_omniparser)
 
 
@@ -63,6 +69,10 @@ def _build_atspi(config: dict[str, Any], _context: ProviderBuildContext):
     if not config.get("enabled", False) or not AtSpiEvidenceProvider.available():
         return None
     return AtSpiEvidenceProvider()
+
+
+def _build_wl_clipboard(config: dict[str, Any], _context: ProviderBuildContext):
+    return WlClipboardEvidenceProvider() if config.get("enabled", False) else None
 
 
 def _validate_omniparser(config: dict[str, Any], location: str) -> None:

@@ -36,6 +36,9 @@
     "atspi": {
       "enabled": false
     },
+    "wl_clipboard": {
+      "enabled": false
+    },
     "omniparser": {
       "enabled": false,
       "endpoint": ""
