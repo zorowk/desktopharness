@@ -44,7 +44,7 @@ class QwenCUAAgent:
         max_response_chars: int = 16384,
         top_p: float = 0.5,
         temperature: float = 0.1,
-        max_history_turns: int = 4,
+        max_history_turns: int = 1,
         coordinate_type: str = "relative",
         resize_factor: int = 32,
     ) -> None:

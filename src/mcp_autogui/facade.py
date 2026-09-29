@@ -428,7 +428,7 @@ def _validation_error(failure: ValidationFailure) -> dict[str, Any]:
 def parse_task_contract(value: dict[str, Any]) -> TaskContract:
     if not isinstance(value, dict):
         raise ValueError("task_contract must be an object")
-    allowed = {"task_id", "goal", "assertions", "limits", "verification_profile"}
+    allowed = {"task_id", "goal", "steps", "assertions", "limits", "verification_profile"}
     unknown = sorted(set(value) - allowed)
     if unknown:
         raise ValueError(f"task_contract has unknown fields: {', '.join(unknown)}")
@@ -446,12 +446,18 @@ def parse_task_contract(value: dict[str, Any]) -> TaskContract:
         for item in value.get("assertions", [])
     )
     limits = value.get("limits") or {}
+    raw_steps = value.get("steps", [])
+    if not isinstance(raw_steps, list) or not all(
+        isinstance(step, str) and step.strip() for step in raw_steps
+    ):
+        raise ValueError("task_contract.steps must be a list of non-empty strings")
     return TaskContract(
         task_id=str(value.get("task_id") or "").strip(),
         goal=str(value.get("goal") or "").strip(),
         assertions=assertions,
         limits=TaskLimits(int(limits.get("max_steps", 10)), int(limits.get("max_retries", 1))),
         verification_profile=str(value.get("verification_profile") or "default"),
+        steps=tuple(step.strip() for step in raw_steps),
     )
 
 

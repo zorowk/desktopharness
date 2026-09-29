@@ -219,12 +219,11 @@ class ProposalValidator:
 
         target = snapshot.window(target_id) if target_id else None
         if action.type in _KEYBOARD_ACTIONS and target is None:
-            reason = (
-                ReasonCode.TARGET_NOT_FOUND
-                if self._descriptor.capabilities.active_window
-                else ReasonCode.CAPABILITY_UNAVAILABLE
-            )
-            return ValidationFailure(reason, False)
+            # Wayland shell surfaces such as Deepin's launcher and its search
+            # field need keyboard focus but are not advertised in Treeland's
+            # normal window tree.  Do not reject their visible GUI input merely
+            # because there is no compositor active window to bind it to.
+            return None
         if target is not None and target.visible is not True:
             reason = ReasonCode.TARGET_OCCLUDED if target.visible is False else ReasonCode.CAPABILITY_UNAVAILABLE
             return ValidationFailure(reason, False)
@@ -248,6 +247,7 @@ class ProposalValidator:
             required_hit_window_id=target_id if require_hit else None,
             cursor_origin=cursor_origin,
         )
+
 
     def _recheck_dependency(
         self, dependency: ActionDependency, snapshot: CanonicalSnapshot

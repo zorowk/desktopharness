@@ -91,6 +91,16 @@ class ProposalValidatorTests(unittest.TestCase):
     def test_unknown_intent_does_not_require_confirmation(self):
         self.assertIsInstance(self.validator().prepare(snapshot(), click()), PreparedProposal)
 
+    def test_shell_keyboard_input_is_allowed_without_an_active_window(self):
+        desktop = replace(snapshot(), windows=())
+        for action in (
+            Action(ActionType.KEYBOARD_KEY, parameters={"key": "win"}),
+            Action(ActionType.KEYBOARD_TEXT, parameters={"text": "Text Editor"}),
+            Action(ActionType.KEYBOARD_SHORTCUT, parameters={"keys": ["ctrl", "l"]}),
+        ):
+            proposal = ActionProposal("shell-input", "fixture", desktop.snapshot_id, (action,))
+            self.assertIsInstance(self.validator().prepare(desktop, proposal), PreparedProposal)
+
     def test_done_must_be_last(self):
         proposal = ActionProposal(
             "p", "fixture", "snapshot-1",
@@ -159,6 +169,25 @@ class ProposalValidatorTests(unittest.TestCase):
 
 
 class TaskStateReducerTests(unittest.TestCase):
+    def test_final_assertions_cannot_complete_an_intermediate_plan_step(self):
+        reducer = TaskStateReducer()
+        task = TaskContract(
+            "task-1", "complete both steps",
+            assertions=(AssertionSpec("final", "active_window.title", "contains", "saved"),),
+            steps=("open", "save"),
+        )
+        passed = AssertionResult(
+            "final", task.assertions[0], AssertionStatus.PASSED, (),
+            utc_now(), "transiently true",
+        )
+
+        intermediate = reducer.reduce(task, TaskState("task-1", plan_step=0), (passed,))
+        final = reducer.reduce(task, TaskState("task-1", plan_step=1), (passed,))
+
+        self.assertEqual(intermediate.status, TaskStatus.RUNNING)
+        self.assertEqual(intermediate.completed_assertions, ())
+        self.assertEqual(final.status, TaskStatus.COMPLETED)
+
     def test_retryable_validation_consumes_only_retry_budget(self):
         reducer = TaskStateReducer()
         task = contract(retries=1)
@@ -329,6 +358,50 @@ class OrchestratorTests(unittest.TestCase):
         self.assertEqual(second["state"].status, TaskStatus.DELIVERED_UNVERIFIED)
         self.assertEqual(provider.feedback[-1], ("task-1", "partial"))
 
+    def test_step_plan_advances_inside_one_run_without_ending_the_task(self):
+        class Provider:
+            provider_id = "fixture"
+            def __init__(self):
+                self.index = 0
+                self.goals = []
+                self.resets = []
+            def propose(self, context):
+                self.index += 1
+                self.goals.append(context.goal)
+                return ActionProposal(
+                    f"plan-{self.index}", "fixture", context.based_on_snapshot,
+                    (
+                        Action(ActionType.POINTER_CLICK, Point(100, 100), "desktop-logical"),
+                        Action(ActionType.DONE),
+                    ),
+                )
+            def record_execution(self, *args, **kwargs):
+                return None
+            def reset(self, task_id):
+                self.resets.append(task_id)
+
+        provider = Provider()
+        runtime = self.runtime(
+            [snapshot(), snapshot("s2"), snapshot("s3"), snapshot("s4")],
+            provider=provider,
+        )
+        runtime.register_task(TaskContract(
+            "task-1", "Open and edit a document.",
+            steps=("Open the editor.", "Enter the text."),
+            limits=TaskLimits(max_steps=4, max_retries=1),
+        ))
+
+        outcome = runtime.run("task-1")
+
+        self.assertEqual(outcome["state"].status, TaskStatus.DELIVERED_UNVERIFIED)
+        self.assertEqual(outcome["state"].plan_step, 1)
+        self.assertEqual(provider.goals, ["Open the editor.", "Enter the text."])
+        self.assertEqual(provider.resets, ["task-1"])
+        self.assertTrue(any(
+            event.event_type == "task.plan_step_advanced"
+            for event in runtime.ledger.events("task-1")
+        ))
+
     def test_done_before_any_delivery_fails(self):
         class DoneProvider:
             provider_id = "done"
@@ -361,6 +434,38 @@ class OrchestratorTests(unittest.TestCase):
         state = runtime.run_step("task-1")["state"]
         self.assertEqual(state.status, TaskStatus.COMPLETED)
         self.assertEqual(evaluated, ["task-1"])
+
+    def test_run_reprompts_after_done_when_observed_assertions_are_not_complete(self):
+        class DoneProvider:
+            provider_id = "done"
+            def __init__(self):
+                self.index = 0
+            def propose(self, context):
+                self.index += 1
+                return ActionProposal(
+                    f"done-{self.index}", "done", context.based_on_snapshot,
+                    (Action(ActionType.DONE),),
+                )
+            def record_outcome(self, *args, **kwargs):
+                return None
+
+        provider = DoneProvider()
+        runtime = self.runtime([snapshot(), snapshot("s2")], provider=provider)
+        runtime.register_task(TaskContract(
+            "task-1", "verify the final state",
+            assertions=(AssertionSpec("ready", "active_window.app_id", "equals", "desktop"),),
+        ))
+        evaluated = []
+        def evaluate(task_id):
+            evaluated.append(task_id)
+            status = TaskStatus.RUNNING if len(evaluated) == 1 else TaskStatus.COMPLETED
+            return (), (), TaskState(task_id, status)
+        runtime.evaluate = evaluate
+
+        outcome = runtime.run("task-1", max_iterations=2)
+
+        self.assertEqual(outcome["state"].status, TaskStatus.COMPLETED)
+        self.assertEqual(provider.index, 2)
 
     def test_done_after_unknown_delivery_does_not_claim_delivered_unverified(self):
         class UnknownExecutor(FakeExecutor):

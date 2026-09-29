@@ -56,7 +56,20 @@ class TaskStateReducer:
         hard_failures = [item for item in required if item.assertion_id in failed and not item.recoverable]
         recoverable_failures = [item for item in required if item.assertion_id in failed and item.recoverable]
 
-        if required and all(item.assertion_id in completed for item in required):
+        plan_pending = bool(contract.steps) and state.plan_step < len(contract.steps) - 1
+        if plan_pending:
+            status = (
+                TaskStatus.FAILED
+                if state.step >= contract.limits.max_steps
+                else TaskStatus.RUNNING
+            )
+            retries = state.retries
+            # Final postconditions may happen to be true transiently during an
+            # earlier plan step.  Do not carry that observation forward as if
+            # it had verified the completed workflow.
+            completed = ()
+            failed = ()
+        elif required and all(item.assertion_id in completed for item in required):
             status = TaskStatus.COMPLETED
             retries = state.retries
         elif hard_failures or state.step >= contract.limits.max_steps:
@@ -85,4 +98,5 @@ class TaskStateReducer:
             retries=retries,
             completed_assertions=completed,
             failed_assertions=failed,
+            plan_step=state.plan_step,
         )

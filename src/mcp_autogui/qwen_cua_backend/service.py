@@ -41,7 +41,7 @@ class QwenCUAConfig:
             max_response_chars=int(provider.get("max_response_chars", 16384)),
             top_p=float(provider.get("top_p", 0.5)),
             temperature=float(provider.get("temperature", 0.1)),
-            max_history_turns=int(provider.get("max_history_turns", 4)),
+            max_history_turns=int(provider.get("max_history_turns", 1)),
             coordinate_type=str(provider.get("coordinate_type", "relative")),
             resize_factor=int(provider.get("resize_factor", 32)),
         )

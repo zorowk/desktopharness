@@ -96,6 +96,10 @@ class CoreOrchestrator:
     def register_task(self, contract: TaskContract) -> TaskState:
         if not contract.task_id or not contract.goal:
             raise ValueError("task_id and goal must not be empty")
+        if len(contract.steps) > 32 or any(
+            not isinstance(step, str) or not step.strip() for step in contract.steps
+        ):
+            raise ValueError("task steps must contain at most 32 non-empty strings")
         assertion_ids = [assertion.assertion_id for assertion in contract.assertions]
         if len(assertion_ids) != len(set(assertion_ids)) or any(
             not item for item in assertion_ids
@@ -502,6 +506,16 @@ class CoreOrchestrator:
             self._finalize_provider_outcome(
                 task_id, proposal, "partial", ReasonCode.INSUFFICIENT_GROUND_TRUTH
             )
+            if self._has_pending_plan_step(task_id):
+                state = self._advance_plan_step(
+                    task_id,
+                    caused_by=self._causes_for(proposal.proposal_id),
+                    snapshot_id=proposal.based_on_snapshot,
+                )
+                return {
+                    "proposal": proposal, "validation": None, "receipt": None,
+                    "evidence": (), "assertion_results": (), "state": state,
+                }
             if self._tasks.contract(task_id).assertions:
                 evidence, results, state = self.evaluate(task_id)
                 return {
@@ -545,6 +559,16 @@ class CoreOrchestrator:
                 "receipt": receipt,
                 "state": self._tasks.state(task_id),
             }
+        if has_done and self._has_pending_plan_step(task_id):
+            state = self._advance_plan_step(
+                task_id,
+                caused_by=self._causes_for(receipt.execution_id),
+                snapshot_id=proposal.based_on_snapshot,
+            )
+            return {
+                "proposal": proposal, "validation": None, "receipt": receipt,
+                "evidence": (), "assertion_results": (), "state": state,
+            }
         if has_done and not self._tasks.contract(task_id).assertions:
             state = self.reducer.delivered_unverified(self._tasks.state(task_id))
             self._transition_state(
@@ -583,6 +607,7 @@ class CoreOrchestrator:
         active_strategy = strategy
         for _ in range(limit):
             before = set(self._tasks.state(task_id).completed_assertions)
+            before_plan_step = self._tasks.state(task_id).plan_step
             outcome = self.run_step(task_id, strategy=active_strategy)
             proposal = outcome["proposal"]
             validation = outcome.get("validation")
@@ -608,7 +633,10 @@ class CoreOrchestrator:
                 return {"state": state, "iterations": tuple(outcomes)}
 
             signature = to_primitive(proposal.action_sequence)
-            progressed = bool(set(state.completed_assertions) - before)
+            progressed = (
+                bool(set(state.completed_assertions) - before)
+                or state.plan_step > before_plan_step
+            )
             if not progressed and signature == previous_signature:
                 repeated_without_progress += 1
             else:
@@ -635,8 +663,6 @@ class CoreOrchestrator:
             active_strategy = (
                 "recovery" if state.status == TaskStatus.RETRYING else strategy
             )
-            if proposal.action_sequence[-1].type == ActionType.DONE:
-                return {"state": state, "iterations": tuple(outcomes)}
         return {
             "state": self._tasks.state(task_id),
             "iterations": tuple(outcomes),
@@ -696,6 +722,49 @@ class CoreOrchestrator:
             )
             self._tasks.clear_task(task_id)
             self._audit.clear_task(task_id)
+
+    def _has_pending_plan_step(self, task_id: str) -> bool:
+        contract = self._tasks.contract(task_id)
+        return bool(contract.steps) and self._tasks.state(task_id).plan_step < len(contract.steps) - 1
+
+    def _advance_plan_step(
+        self,
+        task_id: str,
+        *,
+        caused_by: tuple[str, ...],
+        snapshot_id: str,
+    ) -> TaskState:
+        contract = self._tasks.contract(task_id)
+        current = self._tasks.state(task_id)
+        if not contract.steps or current.plan_step >= len(contract.steps) - 1:
+            raise ValueError("task has no pending plan step")
+        next_index = current.plan_step + 1
+        plan_ref = self._audit.put(
+            task_id,
+            {
+                "task_id": task_id,
+                "from_index": current.plan_step,
+                "to_index": next_index,
+                "next_step": contract.steps[next_index],
+            },
+            prefix="task-plan-step",
+        )
+        event = self._append_event(
+            task_id,
+            "task.plan_step_advanced",
+            plan_ref,
+            caused_by=caused_by,
+            snapshot_id=snapshot_id or None,
+        )
+        resetter = getattr(self.proposal_provider, "reset", None)
+        if callable(resetter):
+            resetter(task_id)
+        return self._transition_state(
+            task_id,
+            replace(current, status=TaskStatus.RUNNING, plan_step=next_index),
+            caused_by=(event.event_id,),
+            snapshot_id=snapshot_id,
+        )
 
     def _require_task(self, task_id: str) -> TaskContract:
         try:

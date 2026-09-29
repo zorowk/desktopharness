@@ -128,6 +128,23 @@ class FacadeTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "unknown fields"):
                     parse_task_contract(payload)
 
+    def test_task_contract_accepts_an_ordered_step_plan(self):
+        payload = {
+            **MINIMAL_TASK,
+            "steps": ["Open the editor.", "Type the text.", "Save the document."],
+        }
+
+        contract = parse_task_contract(payload)
+
+        self.assertEqual(
+            contract.steps,
+            ("Open the editor.", "Type the text.", "Save the document."),
+        )
+
+    def test_task_contract_rejects_blank_plan_steps(self):
+        with self.assertRaisesRegex(ValueError, "non-empty strings"):
+            parse_task_contract({**MINIMAL_TASK, "steps": ["Open the editor.", " "]})
+
     def test_content_edit_claim_executes_without_confirmation(self):
         api, runtime, executor, provider = facade()
         response = api.handle("run", task_contract=MINIMAL_TASK, max_iterations=1)

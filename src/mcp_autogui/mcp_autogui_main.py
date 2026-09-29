@@ -105,7 +105,7 @@ def mcp_autogui_main(
         strategy: str = 'compact',
         max_iterations: int | None = None,
     ) -> dict:
-        """运行紧凑任务生命周期：describe、run、status、reset。"""
+        """运行紧凑任务生命周期；task_contract 可含由 MCP 依次推进的 steps。"""
         return await run_blocking(
             facade.handle,
             operation,

@@ -169,6 +169,9 @@ class QwenCUAProposalProvider:
         }
         return (
             "Use the screenshot and this controller context. Return one proposal.\n"
+            "When constraints.plan.steps is non-empty, work only on its current_step; "
+            "do not start later steps early. Terminate successfully when the current "
+            "step is visibly complete so the controller can advance the plan.\n"
             "The completion_requirements are controller-authoritative: do not "
             "terminate successfully, or treat the GUI sequence as finished, until "
             "the latest screenshot and spatial_projection show every required "

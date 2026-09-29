@@ -1,5 +1,6 @@
 import os
 import unittest
+from dataclasses import replace
 from unittest.mock import patch
 
 from PIL import Image
@@ -228,6 +229,26 @@ class EmbeddedAgentTests(unittest.TestCase):
 
 
 class EmbeddedServiceTests(unittest.TestCase):
+    def test_short_history_keeps_only_the_previous_successful_turn(self):
+        agent = FakeAgent()
+        service = QwenCUAService(
+            replace(_config(), max_history_turns=1), agent=agent
+        )
+
+        service.predict("complete the desktop task", _png(), "session-1", client_step=1)
+        first = service.record_execution(
+            "session-1", status="success", execution=[{"status": "success"}]
+        )
+        service.predict("complete the desktop task", _png(), "session-1", client_step=2)
+        second = service.record_execution(
+            "session-1", status="success", execution=[{"status": "success"}]
+        )
+        service.predict("complete the desktop task", _png(), "session-1", client_step=3)
+
+        self.assertEqual(first["history_turns"], 1)
+        self.assertEqual(second["history_turns"], 1)
+        self.assertEqual([len(call["history"]) for call in agent.calls], [0, 1, 1])
+
     def test_success_is_committed_only_after_execution_feedback(self):
         agent = FakeAgent()
         service = QwenCUAService(_config(), agent=agent)

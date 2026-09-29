@@ -6,6 +6,29 @@ from mcp_autogui.core.models import AssertionSpec, TaskContract, TaskLimits, Tas
 
 
 class CompletionRequirementProjectionTests(unittest.TestCase):
+    def test_only_the_current_plan_step_is_projected_as_the_qwen_goal(self):
+        contract = TaskContract(
+            "TMC-101",
+            "Open an editor, enter text, and save it.",
+            assertions=(
+                AssertionSpec("saved", "active_window.title", "contains", "TMC-101.md"),
+            ),
+            steps=("Open the editor.", "Enter the text.", "Save the document."),
+        )
+        context = ContextBuilder().build(
+            contract,
+            TaskState("TMC-101", plan_step=1),
+            (),
+            based_on_snapshot="snapshot-1",
+        )
+
+        self.assertEqual(context.goal, "Enter the text.")
+        self.assertEqual(context.pending_assertions, ())
+        self.assertEqual(context.constraints["completion_requirements"], ())
+        self.assertEqual(context.constraints["plan"]["current_index"], 1)
+        instruction = QwenCUAProposalProvider._instruction(context)
+        self.assertIn("work only on its current_step", instruction)
+
     def test_required_active_window_title_is_actionable_to_qwen(self):
         contract = TaskContract(
             "TMC-020",

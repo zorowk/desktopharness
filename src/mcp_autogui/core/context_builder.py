@@ -38,11 +38,12 @@ class ContextBuilder:
         if strategy not in self.STRATEGIES:
             raise ValueError(f"unknown context strategy: {strategy}")
         limits = self.PROFILES[strategy]
+        final_plan_step = not contract.steps or state.plan_step >= len(contract.steps) - 1
         pending = tuple(
             assertion.assertion_id
             for assertion in contract.assertions
             if assertion.assertion_id not in state.completed_assertions
-        )
+        ) if final_plan_step else ()
         # Assertion IDs alone are not actionable for a visual agent.  In
         # particular, a task whose success is signalled by a window title must
         # tell the agent both the title and that it must be *active*.  Keep the
@@ -80,7 +81,10 @@ class ContextBuilder:
             task_id=contract.task_id,
             based_on_snapshot=based_on_snapshot,
             frame=frame,
-            goal=contract.goal,
+            goal=(
+                contract.steps[state.plan_step]
+                if contract.steps else contract.goal
+            ),
             current_step=state.step,
             pending_assertions=pending,
             recent_execution_receipt=(to_primitive(recent_receipt) if recent_receipt else None),
@@ -90,6 +94,15 @@ class ContextBuilder:
                 "observe_after_proposal": True,
                 "remaining_steps": max(0, contract.limits.max_steps - state.step),
                 "completion_requirements": completion_requirements,
+                "plan": {
+                    "overall_goal": contract.goal,
+                    "steps": list(contract.steps),
+                    "current_index": state.plan_step,
+                    "current_step": (
+                        contract.steps[state.plan_step] if contract.steps else contract.goal
+                    ),
+                    "is_final_step": final_plan_step,
+                },
             },
             ledger_event_refs=tuple(event.event_id for event in projected_events),
             spatial_projection=spatial_projection or {},

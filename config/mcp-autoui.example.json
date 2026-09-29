@@ -22,7 +22,7 @@
     "top_p": 0.5,
     "max_tokens": 1024,
     "max_response_chars": 16384,
-    "max_history_turns": 4,
+    "max_history_turns": 1,
     "coordinate_type": "relative",
     "resize_factor": 32
   },
