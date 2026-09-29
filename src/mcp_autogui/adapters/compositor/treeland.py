@@ -139,7 +139,7 @@ def parse_wlr_randr_outputs(output: str) -> tuple[OutputFact, ...]:
         header = lines[0]
         output_id = header.split(maxsplit=1)[0]
         enabled = "(enabled)" in header or bool(re.search(r"(?mi)^\s*Enabled:\s*yes\s*$", entry))
-        mode = re.search(r"(?mi)^\s*(\d+)x(\d+)\s+px,.*\(current\)", entry)
+        mode = re.search(r"(?mi)^\s*(\d+)x(\d+)\s+px,.*\([^)]*current[^)]*\)", entry)
         position = re.search(r"(?mi)^\s*Position:\s*(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)\s*$", entry)
         scale_match = re.search(r"(?mi)^\s*Scale:\s*([0-9]+(?:\.[0-9]+)?)\s*$", entry)
         if not enabled or mode is None or position is None:

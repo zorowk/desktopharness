@@ -53,7 +53,8 @@ class TreelandTreeParserTests(unittest.TestCase):
     def test_wlr_randr_reader_discovers_enabled_outputs(self):
         report = '''eDP-1 "Laptop" (enabled)
   Modes:
-    1920x1080 px, 60.000000 Hz (current)
+    1920x1080 px, 60.000000 Hz (preferred, current)
+    1920x1080 px, 59.940000 Hz
   Position: 0,0
   Scale: 1.000000
 HDMI-A-1 "External" (enabled)
