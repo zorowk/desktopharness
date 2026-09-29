@@ -61,6 +61,19 @@ class ContextBuilder:
             for assertion in contract.assertions
             if assertion.assertion_id in pending
         )
+        step_completion_requirements = tuple(
+            {
+                "assertion_id": assertion.assertion_id,
+                "path": assertion.path,
+                "operator": assertion.operator,
+                "expected": assertion.expected,
+                "required": assertion.required,
+            }
+            for assertion in (
+                contract.step_assertions[state.plan_step]
+                if contract.step_assertions else ()
+            )
+        )
         feedback = tuple(
             {
                 "assertion_id": result.assertion_id,
@@ -102,6 +115,7 @@ class ContextBuilder:
                         contract.steps[state.plan_step] if contract.steps else contract.goal
                     ),
                     "is_final_step": final_plan_step,
+                    "step_completion_requirements": step_completion_requirements,
                 },
             },
             ledger_event_refs=tuple(event.event_id for event in projected_events),

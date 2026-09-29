@@ -145,6 +145,20 @@ class FacadeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "non-empty strings"):
             parse_task_contract({**MINIMAL_TASK, "steps": ["Open the editor.", " "]})
 
+    def test_task_contract_accepts_step_completion_assertions(self):
+        contract = parse_task_contract({
+            **MINIMAL_TASK,
+            "steps": ["Open the editor.", "Save the document."],
+            "step_assertions": [[{
+                "assertion_id": "editor-open",
+                "path": "active_window.app_id",
+                "operator": "equals",
+                "expected": "deepin-editor",
+            }], []],
+        })
+
+        self.assertEqual(contract.step_assertions[0][0].assertion_id, "editor-open")
+
     def test_content_edit_claim_executes_without_confirmation(self):
         api, runtime, executor, provider = facade()
         response = api.handle("run", task_contract=MINIMAL_TASK, max_iterations=1)

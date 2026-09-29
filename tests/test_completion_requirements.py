@@ -14,6 +14,10 @@ class CompletionRequirementProjectionTests(unittest.TestCase):
                 AssertionSpec("saved", "active_window.title", "contains", "TMC-101.md"),
             ),
             steps=("Open the editor.", "Enter the text.", "Save the document."),
+            step_assertions=(
+                (AssertionSpec("editor-open", "active_window.app_id", "equals", "deepin-editor"),),
+                (), (),
+            ),
         )
         context = ContextBuilder().build(
             contract,
@@ -26,6 +30,7 @@ class CompletionRequirementProjectionTests(unittest.TestCase):
         self.assertEqual(context.pending_assertions, ())
         self.assertEqual(context.constraints["completion_requirements"], ())
         self.assertEqual(context.constraints["plan"]["current_index"], 1)
+        self.assertEqual(context.constraints["plan"]["step_completion_requirements"], ())
         instruction = QwenCUAProposalProvider._instruction(context)
         self.assertIn("work only on its current_step", instruction)
 

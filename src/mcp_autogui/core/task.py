@@ -47,6 +47,7 @@ class TaskContract:
     limits: TaskLimits = field(default_factory=TaskLimits)
     verification_profile: str = "default"
     steps: tuple[str, ...] = ()
+    step_assertions: tuple[tuple[AssertionSpec, ...], ...] = ()
     schema_version: str = SCHEMA_VERSION
 
 

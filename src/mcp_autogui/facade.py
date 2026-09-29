@@ -428,11 +428,17 @@ def _validation_error(failure: ValidationFailure) -> dict[str, Any]:
 def parse_task_contract(value: dict[str, Any]) -> TaskContract:
     if not isinstance(value, dict):
         raise ValueError("task_contract must be an object")
-    allowed = {"task_id", "goal", "steps", "assertions", "limits", "verification_profile"}
+    allowed = {
+        "task_id", "goal", "steps", "step_assertions", "assertions", "limits",
+        "verification_profile",
+    }
     unknown = sorted(set(value) - allowed)
     if unknown:
         raise ValueError(f"task_contract has unknown fields: {', '.join(unknown)}")
-    assertions = tuple(
+    def parse_assertions(items: Any) -> tuple[AssertionSpec, ...]:
+        if not isinstance(items, list):
+            raise ValueError("assertions must be a list")
+        return tuple(
         AssertionSpec(
             assertion_id=str(item["assertion_id"]),
             path=str(item["path"]),
@@ -443,14 +449,21 @@ def parse_task_contract(value: dict[str, Any]) -> TaskContract:
             subject=dict(item.get("subject") or {}),
             providers=tuple(str(provider) for provider in item.get("providers", [])),
         )
-        for item in value.get("assertions", [])
-    )
+            for item in items
+        )
+    assertions = parse_assertions(value.get("assertions", []))
     limits = value.get("limits") or {}
     raw_steps = value.get("steps", [])
     if not isinstance(raw_steps, list) or not all(
         isinstance(step, str) and step.strip() for step in raw_steps
     ):
         raise ValueError("task_contract.steps must be a list of non-empty strings")
+    raw_step_assertions = value.get("step_assertions", [])
+    if not isinstance(raw_step_assertions, list) or (
+        raw_step_assertions and len(raw_step_assertions) != len(raw_steps)
+    ):
+        raise ValueError("task_contract.step_assertions must match steps length")
+    step_assertions = tuple(parse_assertions(items) for items in raw_step_assertions)
     return TaskContract(
         task_id=str(value.get("task_id") or "").strip(),
         goal=str(value.get("goal") or "").strip(),
@@ -458,6 +471,7 @@ def parse_task_contract(value: dict[str, Any]) -> TaskContract:
         limits=TaskLimits(int(limits.get("max_steps", 10)), int(limits.get("max_retries", 1))),
         verification_profile=str(value.get("verification_profile") or "default"),
         steps=tuple(step.strip() for step in raw_steps),
+        step_assertions=step_assertions,
     )
 
 

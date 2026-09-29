@@ -100,12 +100,20 @@ class CoreOrchestrator:
             not isinstance(step, str) or not step.strip() for step in contract.steps
         ):
             raise ValueError("task steps must contain at most 32 non-empty strings")
-        assertion_ids = [assertion.assertion_id for assertion in contract.assertions]
+        assertion_ids = [
+            assertion.assertion_id
+            for assertions in (contract.assertions, *contract.step_assertions)
+            for assertion in assertions
+        ]
         if len(assertion_ids) != len(set(assertion_ids)) or any(
             not item for item in assertion_ids
         ):
             raise ValueError("assertion IDs must be non-empty and unique within a task")
-        for assertion in contract.assertions:
+        for assertion in (
+            assertion
+            for assertions in (contract.assertions, *contract.step_assertions)
+            for assertion in assertions
+        ):
             require_standard_fact_path(assertion.path)
             if assertion.operator not in SUPPORTED_OPERATORS:
                 raise ValueError(f"unsupported assertion operator: {assertion.operator}")
@@ -400,9 +408,14 @@ class CoreOrchestrator:
         snapshot = self.observe(task_id)
         evidence: list[EvidenceRecord] = []
         evidence_events: list[str] = []
+        current_step_assertions = (
+            contract.step_assertions[self._tasks.state(task_id).plan_step]
+            if contract.step_assertions else ()
+        )
+        all_assertions = (*contract.assertions, *current_step_assertions)
         for provider in self.evidence_providers:
             try:
-                records = provider.collect(contract.assertions, snapshot)
+                records = provider.collect(all_assertions, snapshot)
             except Exception as exc:
                 self._record_attribution(
                     task_id,
@@ -429,7 +442,7 @@ class CoreOrchestrator:
                 evidence.append(record)
         results = tuple(
             self.evaluator.evaluate(assertion, evidence, snapshot)
-            for assertion in contract.assertions
+            for assertion in all_assertions
         )
         result_events = []
         for result in results:
@@ -444,14 +457,36 @@ class CoreOrchestrator:
                 snapshot_id=snapshot.snapshot_id,
             )
             result_events.append(event.event_id)
-        state = self.reducer.reduce(contract, self._tasks.state(task_id), results)
-        self._tasks.set_results(task_id, results)
+        final_results = results[:len(contract.assertions)]
+        state = self.reducer.reduce(contract, self._tasks.state(task_id), final_results)
+        self._tasks.set_results(task_id, final_results)
         self._transition_state(
             task_id,
             state,
             caused_by=tuple(result_events),
             snapshot_id=snapshot.snapshot_id,
         )
+        step_results = results[len(contract.assertions):]
+        required_step_ids = {
+            assertion.assertion_id
+            for assertion in current_step_assertions
+            if assertion.required
+        }
+        passed_step_ids = {
+            result.assertion_id
+            for result in step_results
+            if result.status == AssertionStatus.PASSED
+        }
+        if (
+            required_step_ids
+            and self._has_pending_plan_step(task_id)
+            and required_step_ids <= passed_step_ids
+        ):
+            state = self._advance_plan_step(
+                task_id,
+                caused_by=tuple(result_events),
+                snapshot_id=snapshot.snapshot_id,
+            )
         if state.status in {TaskStatus.RETRYING, TaskStatus.FAILED}:
             failed_refs = tuple(
                 ref
