@@ -61,7 +61,7 @@ while read -r id _; do
   if [[ ( "$type" == wayland || "$type" == x11 ) && "$state" == active \
     && "$remote" == no && -n "$leader_value" ]]; then
     session="$id"
-    session_type="${values[1]}"
+    session_type="$type"
     break
   fi
 done < <(loginctl list-sessions --no-legend)

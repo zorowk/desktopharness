@@ -157,7 +157,10 @@ if ! command -v uv >/dev/null 2>&1; then
 fi
 
 echo "[3/7] Install python dependencies via uv"
-uv sync
+# Sync from the tracked lockfile. A plain `uv sync` re-resolves against the
+# mirror index configured above and rewrites uv.lock with machine-local URLs,
+# which leaves the checkout dirty and blocks the deployment's fast-forward gate.
+uv sync --frozen
 
 if /usr/bin/python3 - <<'PY'
 import pyatspi
