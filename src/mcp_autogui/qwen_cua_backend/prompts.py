@@ -27,29 +27,27 @@ ACTION_DESCRIPTION = """
 * `middle_click`: Click the middle mouse button at a coordinate.
 * `double_click`: Double-click the left mouse button at a coordinate.
 * `triple_click`: Triple-click the left mouse button at a coordinate.
-* `scroll`: Scroll vertically at the current cursor position. First use
-  `mouse_move` to place the cursor over the intended visible scroll target in
-  the same ordered action sequence; do not emit a standalone scroll when the
-  pointer location has not already been established.
-* `hscroll`: Scroll horizontally, with the same `mouse_move` requirement.
+* `scroll`: Scroll vertically only when the current cursor position has already
+  been confirmed over the intended visible target in the latest screenshot.
+* `hscroll`: Scroll horizontally under the same condition.
 * `terminate`: Finish the task with success or failure.
 """
 
 DESCRIPTION_TEMPLATE = """Use a mouse and keyboard to interact with a desktop GUI.
 * Applications are opened by interacting with visible desktop UI.
+* Return exactly one action. The controller captures a fresh screenshot and
+  window-tree observation after every action before requesting another action.
 * Use a single short `wait` only when the latest screenshot visibly shows an
   application or dialog still loading. Never combine `wait` with speculative
   actions that depend on the future interface.
 {resolution_info}
 * Consult the latest screenshot before choosing a coordinate.
 * Aim at the visible center of a control unless the task explicitly requires an edge.
-* Return the minimal ordered action sequence that should be executed before the
-  desktop is observed again. A sequence may contain multiple `<tool_call>` blocks.
-* Do not include actions that depend on UI changes caused by earlier actions."""
+* Return the one minimal action justified by the latest observation."""
 
 SYSTEM_TEMPLATE = """# Tools
 
-You may call the function one or more times for the next GUI proposal. The function signature is inside
+You may call the function once for the next GUI action. The function signature is inside
 <tools></tools> XML tags:
 <tools>
 {tools_xml}
@@ -62,8 +60,6 @@ Action: a short imperative describing the proposed GUI transaction.
 <tool_call>
 {{"name": "computer_use", "arguments": {{...}}}}
 </tool_call>
-
-Repeat the `<tool_call>` block only when the proposal requires an ordered action sequence.
 
 Do not output executable Python. To finish, call `terminate` with a status."""
 

@@ -402,6 +402,75 @@ class OrchestratorTests(unittest.TestCase):
             for event in runtime.ledger.events("task-1")
         ))
 
+    def test_run_reprompts_after_a_model_protocol_error_without_injecting(self):
+        class Provider:
+            provider_id = "fixture"
+
+            def __init__(self):
+                self.calls = 0
+
+            def propose(self, context):
+                self.calls += 1
+                if self.calls == 1:
+                    error = ValueError("exactly one action is required")
+                    error.debug_ref = "model-output-invalid"
+                    raise error
+                return ActionProposal(
+                    "valid", "fixture", context.based_on_snapshot,
+                    (Action(ActionType.POINTER_CLICK, Point(100, 100), "desktop-logical"),),
+                )
+
+        provider = Provider()
+        runtime = self.runtime(
+            [snapshot(), snapshot("s2"), snapshot("s3"), snapshot("s4")],
+            provider=provider,
+        )
+        runtime.register_task(TaskContract(
+            "task-1", "Click once.", limits=TaskLimits(max_steps=1, max_retries=1),
+        ))
+
+        outcome = runtime.run("task-1")
+
+        self.assertEqual(provider.calls, 2)
+        self.assertEqual(len(runtime.executor.actions), 1)
+        self.assertEqual(outcome["state"].step, 1)
+
+    def test_protocol_violation_is_attributed_as_model_protocol_invalid(self):
+        class Provider:
+            provider_id = "fixture"
+
+            def __init__(self):
+                self.calls = 0
+
+            def propose(self, context):
+                self.calls += 1
+                if self.calls == 1:
+                    error = ValueError("exactly one action is required")
+                    error.debug_ref = "model-output-invalid"
+                    error.reason_code = ReasonCode.MODEL_PROTOCOL_INVALID
+                    raise error
+                return ActionProposal(
+                    "valid", "fixture", context.based_on_snapshot,
+                    (Action(ActionType.POINTER_CLICK, Point(100, 100), "desktop-logical"),),
+                )
+
+        provider = Provider()
+        runtime = self.runtime(
+            [snapshot(), snapshot("s2"), snapshot("s3"), snapshot("s4")],
+            provider=provider,
+        )
+        runtime.register_task(TaskContract(
+            "task-1", "Click once.", limits=TaskLimits(max_steps=1, max_retries=1),
+        ))
+
+        runtime.run("task-1")
+
+        codes = [
+            attribution.code
+            for attribution in runtime.attributions("task-1")
+        ]
+        self.assertIn(ReasonCode.MODEL_PROTOCOL_INVALID, codes)
+
     def test_done_before_any_delivery_fails(self):
         class DoneProvider:
             provider_id = "done"

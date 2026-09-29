@@ -30,6 +30,15 @@ class AgentPrediction:
     telemetry: dict[str, Any]
 
 
+class QwenProtocolError(ValueError):
+    """The model response violates the single-step protocol contract.
+
+    Distinct from malformed or empty responses: the controller can correct
+    this by re-prompting with fresh observation and explicit feedback, instead
+    of discarding the session or failing the task outright.
+    """
+
+
 class QwenCUAAgent:
     def __init__(
         self,
@@ -104,7 +113,7 @@ class QwenCUAAgent:
                 coordinate_type=self.coordinate_type,
             )
         except ValueError as exc:
-            error = ValueError(str(exc))
+            error = QwenProtocolError(str(exc)) if isinstance(exc, QwenProtocolError) else ValueError(str(exc))
             error.response = response
             raise error from exc
         return AgentPrediction(
@@ -276,25 +285,25 @@ def parse_s2_response(
         ]
     if not payloads:
         raise ValueError("Qwen response does not contain a computer_use tool call")
-    actions: list[str] = []
-    for payload in payloads:
-        try:
-            tool_call = json.loads(payload)
-        except json.JSONDecodeError as exc:
-            raise ValueError("Qwen tool call is not valid JSON") from exc
-        if tool_call.get("name") != "computer_use":
-            raise ValueError("Qwen tool call must use computer_use")
-        arguments = tool_call.get("arguments")
-        if not isinstance(arguments, dict):
-            raise ValueError("Qwen computer_use arguments must be an object")
-        actions.extend(
-            _computer_use_to_actions(
-                arguments,
-                original_size=original_size,
-                processed_size=processed_size,
-                coordinate_type=coordinate_type,
-            )
+    if len(payloads) != 1:
+        raise QwenProtocolError(
+            "Qwen response must contain exactly one computer_use tool call for the next step"
         )
+    try:
+        tool_call = json.loads(payloads[0])
+    except json.JSONDecodeError as exc:
+        raise ValueError("Qwen tool call is not valid JSON") from exc
+    if tool_call.get("name") != "computer_use":
+        raise ValueError("Qwen tool call must use computer_use")
+    arguments = tool_call.get("arguments")
+    if not isinstance(arguments, dict):
+        raise ValueError("Qwen computer_use arguments must be an object")
+    actions = _computer_use_to_actions(
+        arguments,
+        original_size=original_size,
+        processed_size=processed_size,
+        coordinate_type=coordinate_type,
+    )
     if not actions:
         raise ValueError("Qwen tool call did not produce an action")
     return action_text or "Perform the proposed GUI action", actions

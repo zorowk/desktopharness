@@ -13,12 +13,14 @@ from ...core.models import (
     CanonicalSnapshot,
     ModelContext,
     Point,
+    ReasonCode,
     new_id,
     to_primitive,
 )
 from ...core.store import ObjectStore
 from ...qwen_actions import parse_qwen_actions
 from ...qwen_action_registry import V2_PARSED_QWEN_ACTIONS
+from ...qwen_cua_backend.agent import QwenProtocolError
 
 
 _ACTION_TYPES = {
@@ -51,9 +53,16 @@ if frozenset(_ACTION_TYPES) != V2_PARSED_QWEN_ACTIONS:  # pragma: no cover - imp
 class QwenProposalError(ValueError):
     """A rejected model response whose raw diagnostic is available by reference."""
 
-    def __init__(self, message: str, debug_ref: str) -> None:
+    def __init__(
+        self,
+        message: str,
+        debug_ref: str,
+        *,
+        reason_code: ReasonCode = ReasonCode.MODEL_PLANNING_INVALID,
+    ) -> None:
         super().__init__(message)
         self.debug_ref = debug_ref
+        self.reason_code = reason_code
 
 
 class QwenCUAProposalProvider:
@@ -77,7 +86,14 @@ class QwenCUAProposalProvider:
             raw = getattr(exc, "response", None)
             if isinstance(raw, str):
                 debug_ref = self._store.put({"assistant_output": raw}, prefix="model-output")
-                raise QwenProposalError(str(exc), debug_ref) from exc
+                reason_code = (
+                    ReasonCode.MODEL_PROTOCOL_INVALID
+                    if isinstance(exc, QwenProtocolError)
+                    else ReasonCode.MODEL_PLANNING_INVALID
+                )
+                raise QwenProposalError(
+                    str(exc), debug_ref, reason_code=reason_code
+                ) from exc
             raise
         debug_ref = self._store.put(result, prefix="model-output")
         try:
@@ -169,7 +185,10 @@ class QwenCUAProposalProvider:
             "projection_limits": context.projection_limits,
         }
         return (
-            "Use the screenshot and this controller context. Return one proposal.\n"
+            "Use the screenshot and this controller context. Return exactly one GUI "
+            "action or terminate. The controller observes the screen and window tree "
+            "after that one action before asking again; never plan a follow-up action "
+            "against an interface that has not been observed yet.\n"
             "When constraints.plan.steps is non-empty, work only on its current_step; "
             "do not start later steps early. Terminate successfully when the current "
             "step is visibly complete so the controller can advance the plan. When "

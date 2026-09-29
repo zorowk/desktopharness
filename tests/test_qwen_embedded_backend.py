@@ -9,6 +9,7 @@ from mcp_autogui.qwen_backend import QwenBackendClient
 from mcp_autogui.qwen_cua_backend.agent import (
     AgentPrediction,
     QwenCUAAgent,
+    QwenProtocolError,
     parse_s2_response,
 )
 from mcp_autogui.qwen_cua_backend.image import prepare_screenshot
@@ -190,7 +191,7 @@ class EmbeddedAgentTests(unittest.TestCase):
         self.assertIn("mouse_move", prompt)
         self.assertIn("current cursor position", prompt)
 
-    def test_parse_s2_preserves_multiple_tool_calls_in_order(self):
+    def test_parse_s2_rejects_multiple_tool_calls(self):
         response = """Action: Move then scroll
 <tool_call>
 {"name":"computer_use","arguments":{"action":"mouse_move","coordinate":[500,500]}}
@@ -198,16 +199,13 @@ class EmbeddedAgentTests(unittest.TestCase):
 <tool_call>
 {"name":"computer_use","arguments":{"action":"scroll","pixels":-3}}
 </tool_call>"""
-        _, actions = parse_s2_response(
-            response,
-            original_size=(1000, 800),
-            processed_size=(992, 800),
-            coordinate_type="relative",
-        )
-        self.assertEqual(
-            actions,
-            ["pyautogui.moveTo(500, 400)", "pyautogui.scroll(-3)"],
-        )
+        with self.assertRaisesRegex(ValueError, "exactly one computer_use"):
+            parse_s2_response(
+                response,
+                original_size=(1000, 800),
+                processed_size=(992, 800),
+                coordinate_type="relative",
+            )
 
     def test_agent_rejects_oversized_model_response(self):
         response_text = "x" * 1025
@@ -333,6 +331,48 @@ class EmbeddedServiceTests(unittest.TestCase):
             service.predict("open settings", _png(), "unknown-to-caller")
 
         self.assertEqual(service.health()["sessions"], 0)
+
+    def test_protocol_violation_is_fed_back_without_discarding_session(self):
+        class ProtocolViolatingAgent:
+            def __init__(self):
+                self.calls = []
+
+            def predict(self, instruction, screenshot, history, *, accessibility_tree=None, previous_feedback=None):
+                self.calls.append(
+                    {"history": list(history), "feedback": previous_feedback}
+                )
+                if len(self.calls) == 1:
+                    raise QwenProtocolError(
+                        "Qwen response must contain exactly one computer_use tool call"
+                    )
+                return AgentPrediction(
+                    assistant_output="Action: Click\n<tool_call>\n"
+                    '{"name":"computer_use","arguments":{"action":"left_click","coordinate":[10,10]}}\n'
+                    "</tool_call>",
+                    action_text="Click",
+                    actions=["pyautogui.click(10, 10)"],
+                    processed_image="encoded-image",
+                    original_size=(1000, 800),
+                    processed_size=(992, 800),
+                    telemetry={"backend_mode": "embedded"},
+                )
+
+            def close(self):
+                return None
+
+        agent = ProtocolViolatingAgent()
+        service = QwenCUAService(_config(), agent=agent)
+
+        with self.assertRaisesRegex(QwenProtocolError, "exactly one computer_use"):
+            service.predict("open settings", _png(), "session-1", client_step=1)
+
+        # The session must survive the violation so the feedback can be replayed.
+        self.assertEqual(service.health()["sessions"], 1)
+
+        service.predict("open settings", _png(), "session-1", client_step=2)
+        self.assertEqual(len(agent.calls), 2)
+        self.assertEqual(agent.calls[1]["feedback"]["status"], "rejected")
+        self.assertIn("exactly one computer_use", agent.calls[1]["feedback"]["reason"])
 
     def test_health_does_not_require_model_connection(self):
         service = QwenCUAService(_config(base_url=""), agent=FakeAgent())

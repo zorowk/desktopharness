@@ -219,7 +219,7 @@ class CoreOrchestrator:
                     AttributionEventKind.ERROR,
                     AttributionStage.PLANNING,
                     AttributionOwner.MODEL,
-                    ReasonCode.MODEL_PLANNING_INVALID,
+                    getattr(exc, "reason_code", ReasonCode.MODEL_PLANNING_INVALID),
                     str(exc),
                     evidence_refs=(diagnostic.event_id, debug_ref),
                 )
@@ -640,10 +640,32 @@ class CoreOrchestrator:
         repeated_without_progress = 0
         previous_signature: object = None
         active_strategy = strategy
-        for _ in range(limit):
+        protocol_retries = 0
+        while len(outcomes) < limit:
             before = set(self._tasks.state(task_id).completed_assertions)
             before_plan_step = self._tasks.state(task_id).plan_step
-            outcome = self.run_step(task_id, strategy=active_strategy)
+            try:
+                outcome = self.run_step(task_id, strategy=active_strategy)
+            except Exception as exc:
+                # The Qwen adapter attaches a diagnostic reference when its
+                # response violates the single-action protocol.  Re-observe
+                # and re-prompt within the task retry budget; never execute a
+                # partial model sequence or silently discard its tail.
+                if not isinstance(getattr(exc, "debug_ref", None), str):
+                    raise
+                protocol_retries += 1
+                if protocol_retries <= contract.limits.max_retries:
+                    self.observe(task_id)
+                    continue
+                latest = self._tasks.snapshot(task_id) or self.observe(task_id)
+                state = self._transition_state(
+                    task_id,
+                    replace(self._tasks.state(task_id), status=TaskStatus.FAILED),
+                    caused_by=(),
+                    snapshot_id=latest.snapshot_id,
+                )
+                return {"state": state, "iterations": tuple(outcomes)}
+            protocol_retries = 0
             proposal = outcome["proposal"]
             validation = outcome.get("validation")
             receipt = outcome.get("receipt")

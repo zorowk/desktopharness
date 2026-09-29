@@ -8,7 +8,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
-from .agent import AgentPrediction, QwenCUAAgent
+from .agent import AgentPrediction, QwenCUAAgent, QwenProtocolError
 
 
 @dataclass(frozen=True)
@@ -125,6 +125,16 @@ class QwenCUAService:
                     accessibility_tree=accessibility_tree,
                     previous_feedback=session.previous_feedback,
                 )
+            except QwenProtocolError as exc:
+                # Do not discard the session: feed the violation back so the
+                # next prediction re-prompts with explicit feedback plus a
+                # fresh screenshot instead of repeating the same error.
+                session.previous_feedback = {
+                    "status": "rejected",
+                    "reason": str(exc),
+                    "client_step": client_step,
+                }
+                raise
             except Exception:
                 self._discard_new_empty_session(session_id, session, created)
                 raise

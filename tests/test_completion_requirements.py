@@ -33,6 +33,7 @@ class CompletionRequirementProjectionTests(unittest.TestCase):
         self.assertEqual(context.constraints["plan"]["step_completion_requirements"], ())
         instruction = QwenCUAProposalProvider._instruction(context)
         self.assertIn("work only on its current_step", instruction)
+        self.assertIn("Return exactly one GUI action", instruction)
 
     def test_required_active_window_title_is_actionable_to_qwen(self):
         contract = TaskContract(
