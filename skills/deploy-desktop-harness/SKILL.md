@@ -39,12 +39,14 @@ binary directly, because `client_env.sh` owns the ydotool, udev, and desktop-ses
 
 ## Treeland simulated-manual testing
 
-When the user asks to test Treeland after deployment, the **controlling AI** must read
-[`references/treeland-mcp-test-playbook.md`](references/treeland-mcp-test-playbook.md) in full and
-execute it in order through the deployed MCP endpoint. This is not a second deployment mechanism:
-the target still starts only through `client_env.sh`, while the controlling AI uses the normal MCP
-tools as a simulated human operator. Do not replace the playbook with a local runner, SSH window
-commands, or direct `treeland-debug` control.
+When the user asks to test Treeland after deployment, the **controlling AI** must read the project
+checkout's `docs/treeland-mcp-test-playbook.md` in full before executing it through the deployed MCP
+endpoint. Resolve the remote project directory from `DESKTOPHARNESS_DIR`; when it is unset, use the
+desktop user's home directory discovered during inventory plus `/desktopharness`. Read that remote
+file with the read-only `scripts/remote_exec.sh` transport. This is not a second deployment
+mechanism: the target still starts only through `client_env.sh`, while the controlling AI uses the
+normal MCP tools as a simulated human operator. Do not replace the playbook with a local runner,
+SSH window commands, or direct `treeland-debug` control.
 
 ```sh
 CUA_MODEL_API_KEY=... scripts/deploy.sh --host <ip> --user <ssh-user> \

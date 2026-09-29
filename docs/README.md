@@ -8,7 +8,7 @@
 - [v2.2 精简架构设计](treeland-autoui-mcp-v2-design.md)：整体简化目标、核心能力、运行态与记录职责、协议及迁移边界。
 - [v2.2 实施指南](treeland-autoui-mcp-v2-implementation.md)：S0–S5 实施顺序、候选提交单元、删除项、保留能力、完成状态和验收条件。
 - [v2 手工验收与回归计划](manual-test-guide.md)：真实桌面测试前提、测试矩阵、记录格式和通过标准。
-- [Treeland MCP 模拟人工测试剧本](../skills/deploy-desktop-harness/references/treeland-mcp-test-playbook.md)：供 Multica 主控 AI 逐项理解并通过 MCP 执行的 Treeland 测试。
+- [Treeland MCP 人工式 GUI 测试剧本](treeland-mcp-test-playbook.md)：项目随 checkout 提供的真实桌面工作流测试；可直接按目标环境调整。
 - [v2 项目评分卡](PROJECT_SCORECARD.md)：固定的 release 评分维度、否决项、指标和当前基线评分。
 - [S5 真实验证记录](s5-validation-report.md)：自动、连接与已执行的真实桌面用例，以及未完成项。
 
