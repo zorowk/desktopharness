@@ -10,17 +10,25 @@
 4. 每项结束后关闭本项创建的窗口、恢复显示或输入法状态、清理临时文件，再调用 `gui_run(operation="reset", task_id=<ID>)`。
 5. 每项最多使用合同规定的 `max_steps` 和 `max_retries`，不能通过无限重试获得通过。
 
+### 固定测试夹具
+
+本剧本就是文本用例的唯一夹具。执行前，控制器将当前 checkout 中的本文件复制到
+`/home/uos/DesktopHarness-Test/treeland-mcp-test-playbook.md`；复制是前置数据准备，不计入
+GUI 测试步骤。控制器必须确认 `/home/uos/DesktopHarness-Test/` 可写，并在每项前确认该副本
+存在。任务合同向 Qwen 提供文中写出的完整路径，不让它推导 checkout 位置。固定目录不可写
+或夹具副本缺失时，记录 `skipped`。
+
 ## TMC-101：启动编辑器、输入并保存文档
 
-前置条件：应用启动器和系统编辑器可用；`~/DesktopHarness-Test/` 可写；项目 checkout 中的 `docs/README.md` 可打开。
+前置条件：应用启动器和系统编辑器可用；`/home/uos/DesktopHarness-Test/` 可写；`/home/uos/DesktopHarness-Test/treeland-mcp-test-playbook.md` 可打开。
 
-1. 通过启动器打开编辑器，并打开项目的 `docs/README.md`。
+1. 通过启动器打开 `Text Editor`（中文界面名称为“文本编辑器”）。在编辑器按 `Ctrl+O`，在文件选择器中输入 `/home/uos/DesktopHarness-Test/treeland-mcp-test-playbook.md` 并打开。
 2. 从可见的正文中选择一个完整的短段落，关闭参考文档后新建文档并逐字输入该段落。
-3. 保存新文档到测试目录的固定文件名。
+3. 用保存对话框将新文档保存到 `/home/uos/DesktopHarness-Test/TMC-101.md`。
 
-通过：Qwen 在编辑器正文中视觉确认所选段落完整且保存成功；编辑器为活动窗口，窗口标题包含文件名。可用时再以 AT-SPI `document.text` 精确比对。
+通过：Qwen 在编辑器正文中视觉确认所选段落完整且保存成功；编辑器为活动窗口，窗口标题包含 `TMC-101.md`。可用时再以 AT-SPI `document.text` 精确比对。
 
-清理：关闭文档和编辑器，删除临时文件，关闭启动器。
+清理：关闭文档和编辑器，删除 `/home/uos/DesktopHarness-Test/TMC-101.md`，关闭启动器。
 
 ## TMC-102：切换双屏模式并恢复基线
 
@@ -36,9 +44,9 @@
 
 ## TMC-103：切换中文输入法并输入中文
 
-前置条件：系统编辑器可用；已启用中文拼音输入法；切换快捷键为 `Ctrl+Shift`；候选面板可见；项目的 `README_zh.md` 可打开。任一条件不满足则 skipped。
+前置条件：系统编辑器可用；已启用中文拼音输入法；切换快捷键为 `Ctrl+Shift`；候选面板可见；`/home/uos/DesktopHarness-Test/treeland-mcp-test-playbook.md` 可打开。任一条件不满足则 skipped。
 
-1. 打开 `README_zh.md`，选择一条完整、可见的中文句子作为参考。
+1. 在编辑器按 `Ctrl+O`，输入 `/home/uos/DesktopHarness-Test/treeland-mcp-test-playbook.md` 并打开；选择一条完整、可见的中文句子作为参考。
 2. 关闭参考文档后新建文档并聚焦文本区，按 `Ctrl+Shift`，用拼音输入该句子。
 3. 每次出现候选面板时，依据可见候选文字选择正确中文并提交。
 
@@ -50,20 +58,20 @@
 
 前置条件：系统编辑器和文件管理器可用。
 
-1. 启动编辑器，输入固定短文本。
-2. 启动文件管理器并打开测试目录。
+1. 通过启动器启动 `Text Editor`，新建文档并输入固定 ASCII 文本 `Treeland window state test`，再保存到 `/home/uos/DesktopHarness-Test/TMC-104.txt`。
+2. 通过启动器启动 `File Manager`（中文界面名称为“文件管理器”），在位置栏输入 `/home/uos/DesktopHarness-Test/` 并打开。
 3. 用任务视图或 `Alt+Tab` 返回编辑器。
 4. 对编辑器依次最大化、恢复、最小化、恢复。
 
 通过：窗口树确认每个窗口状态；最终编辑器为活动窗口、处于恢复状态，且 Qwen 视觉确认固定短文本仍完整。可用时再以 AT-SPI 精确比对。
 
-清理：关闭本项创建的文件管理器、编辑器和任务视图，不保留临时文档。
+清理：关闭本项创建的文件管理器、编辑器和任务视图，删除 `/home/uos/DesktopHarness-Test/TMC-104.txt`。
 
 ## TMC-105：跨应用复制粘贴
 
-前置条件：系统编辑器和终端或第二个编辑器窗口可用；项目的 `docs/README.md` 可打开。启用 `wl_clipboard` evidence provider；测试前的剪贴板必须是可恢复的纯文本，否则 skipped。
+前置条件：系统编辑器和终端或第二个编辑器窗口可用；`/home/uos/DesktopHarness-Test/treeland-mcp-test-playbook.md` 可打开。启用 `wl_clipboard` evidence provider；测试前的剪贴板必须是可恢复的纯文本，否则 skipped。
 
-1. 在源编辑器打开 `docs/README.md`，复制一个完整的可见段落。
+1. 在源编辑器按 `Ctrl+O`，输入 `/home/uos/DesktopHarness-Test/treeland-mcp-test-playbook.md` 并打开；复制一个完整的可见段落。
 2. 切换到目标应用并粘贴，确认文本一致。
 3. 回到源编辑器，复制另一个不同的可见段落。
 4. 再次粘贴到目标应用。
