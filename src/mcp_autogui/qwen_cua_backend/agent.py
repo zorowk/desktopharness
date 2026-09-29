@@ -365,9 +365,13 @@ def _computer_use_to_actions(
             joined = ", ".join(repr(key) for key in keys)
             function = "hotkey" if len(keys) > 1 else "press"
             return [f"pyautogui.{function}({joined})"]
+        if len(keys) != 1:
+            raise QwenProtocolError(
+                f"Qwen {action} action must contain exactly one key; "
+                "use key for an atomic shortcut"
+            )
         function = "keyDown" if action == "key_down" else "keyUp"
-        ordered = keys if action == "key_down" else list(reversed(keys))
-        return [f"pyautogui.{function}({key!r})" for key in ordered]
+        return [f"pyautogui.{function}({keys[0]!r})"]
     if action in {"scroll", "hscroll"}:
         pixels = _bounded_number(arguments.get("pixels", 0), -100000, 100000, "pixels")
         return [f"pyautogui.{action}({pixels})"]

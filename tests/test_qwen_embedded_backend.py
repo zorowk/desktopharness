@@ -207,6 +207,20 @@ class EmbeddedAgentTests(unittest.TestCase):
                 coordinate_type="relative",
             )
 
+    def test_parse_s2_rejects_multi_key_hold_as_multiple_actions(self):
+        response = (
+            "Action: Hold Ctrl and Shift\n<tool_call>"
+            '{"name":"computer_use","arguments":{"action":"key_down","keys":["ctrl","shift"]}}'
+            "</tool_call>"
+        )
+        with self.assertRaisesRegex(QwenProtocolError, "exactly one key"):
+            parse_s2_response(
+                response,
+                original_size=(1000, 800),
+                processed_size=(992, 800),
+                coordinate_type="relative",
+            )
+
     def test_agent_rejects_oversized_model_response(self):
         response_text = "x" * 1025
 

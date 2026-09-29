@@ -414,6 +414,7 @@ class OrchestratorTests(unittest.TestCase):
                 if self.calls == 1:
                     error = ValueError("exactly one action is required")
                     error.debug_ref = "model-output-invalid"
+                    error.reason_code = ReasonCode.MODEL_PROTOCOL_INVALID
                     raise error
                 return ActionProposal(
                     "valid", "fixture", context.based_on_snapshot,
@@ -434,6 +435,36 @@ class OrchestratorTests(unittest.TestCase):
         self.assertEqual(provider.calls, 2)
         self.assertEqual(len(runtime.executor.actions), 1)
         self.assertEqual(outcome["state"].step, 1)
+        self.assertTrue(any(
+            event.event_type == "model.protocol_retry"
+            for event in runtime.ledger.events("task-1")
+        ))
+
+    def test_run_does_not_retry_a_model_planning_error(self):
+        class Provider:
+            provider_id = "fixture"
+
+            def __init__(self):
+                self.calls = 0
+
+            def propose(self, context):
+                self.calls += 1
+                error = ValueError("Qwen tool call is not valid JSON")
+                error.debug_ref = "model-output-invalid"
+                error.reason_code = ReasonCode.MODEL_PLANNING_INVALID
+                raise error
+
+        provider = Provider()
+        runtime = self.runtime([snapshot(), snapshot("s2")], provider=provider)
+        runtime.register_task(TaskContract(
+            "task-1", "Click once.", limits=TaskLimits(max_steps=1, max_retries=1),
+        ))
+
+        with self.assertRaisesRegex(ValueError, "not valid JSON"):
+            runtime.run("task-1")
+
+        self.assertEqual(provider.calls, 1)
+        self.assertEqual(runtime.executor.actions, [])
 
     def test_protocol_violation_is_attributed_as_model_protocol_invalid(self):
         class Provider:

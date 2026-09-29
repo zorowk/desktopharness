@@ -651,11 +651,22 @@ class CoreOrchestrator:
                 # response violates the single-action protocol.  Re-observe
                 # and re-prompt within the task retry budget; never execute a
                 # partial model sequence or silently discard its tail.
-                if not isinstance(getattr(exc, "debug_ref", None), str):
+                if (
+                    not isinstance(getattr(exc, "debug_ref", None), str)
+                    or getattr(exc, "reason_code", None) != ReasonCode.MODEL_PROTOCOL_INVALID
+                ):
                     raise
                 protocol_retries += 1
                 if protocol_retries <= contract.limits.max_retries:
-                    self.observe(task_id)
+                    latest = self.observe(task_id)
+                    self._append_event(
+                        task_id,
+                        "model.protocol_retry",
+                        f"protocol-retry:{protocol_retries}",
+                        caused_by=self._causes_for(latest.snapshot_id),
+                        snapshot_id=latest.snapshot_id,
+                        debug_ref=exc.debug_ref,
+                    )
                     continue
                 latest = self._tasks.snapshot(task_id) or self.observe(task_id)
                 state = self._transition_state(

@@ -13,8 +13,9 @@ ACTION_DESCRIPTION = """
   seconds. Use this only when the latest screenshot shows that an application
   or dialog is still loading.
 * `key`: Press one key, or a shortcut when multiple keys are provided.
-* `key_down`: Press and hold the specified keys.
-* `key_up`: Release the specified keys in reverse order.
+* `key_down`: Press and hold exactly one key.
+* `key_up`: Release exactly one key. Use `key` for an atomic shortcut such as
+  Ctrl+L; do not build a shortcut with separate key-down and key-up actions.
 * `type`: Type a string of text.
 * `mouse_move`: Move the cursor to a coordinate.
 * `left_click`: Click the left mouse button at a coordinate.
