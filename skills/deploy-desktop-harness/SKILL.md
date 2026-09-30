@@ -34,8 +34,17 @@ Run only `scripts/deploy.sh`. It first verifies `treeland-debug --json tree`; on
 triggers a matching Debug Treeland build, in-place install, and service restart. All lower-level
 helpers are internal.
 
+For a Treeland login or lock-screen test, append `--prelogin`. This starts MCP using the
+compositor's login-screen environment and does not alter DDM automatic-login settings.
+
 DesktopHarness is started through the target checkout's `client_env.sh`; do not invoke the MCP
 binary directly, because `client_env.sh` owns the ydotool, udev, and desktop-session setup.
+
+## Authentication screens
+
+Do not configure, enable, or change DDM automatic login. If a DDM login screen or lock screen is
+shown while preparing or testing the desktop, use the MCP/PyAutoGUI path to enter the
+user-supplied desktop password, unlock the desktop, and then continue the requested test.
 
 ## Treeland simulated-manual testing
 

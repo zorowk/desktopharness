@@ -155,7 +155,7 @@ if [[ "$backend" == treeland-* ]]; then
     || fail DEPENDENCY treeland-backend-unavailable-in-desktop-session
 fi
 
-if ! pgrep -u "$desktop_user" -f 'treeland-autogui-mcp.*--config' >/dev/null; then
+if ! pgrep -u "$desktop_user" -f '[t]reeland-autogui-mcp.*--config' >/dev/null; then
   run_as_desktop env "${session_env_args[@]}" AUTOUI_MCP_CONFIG="$config" sh -c \
     'IFS= read -r line < "$1" || exit 1; CUA_MODEL_API_KEY=${line#CUA_MODEL_API_KEY=}; [ "$CUA_MODEL_API_KEY" != "$line" ] || exit 1; export CUA_MODEL_API_KEY; cd "$2"; nohup ./client_env.sh >"$3" 2>&1 &' _ \
     "$env_file" "$PROJECT_DIR" \
