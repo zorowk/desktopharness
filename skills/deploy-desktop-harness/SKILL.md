@@ -8,128 +8,72 @@ description: >-
 
 # Deploy DesktopHarness
 
-Use this skill only when the user wants a supplied physical desktop machine prepared or repaired as
-a DesktopHarness MCP node. It does not create machines, run application tests, or alter the local
-controller.
+Prepare a supplied desktop machine as a DesktopHarness MCP node. Do not create machines or alter
+the local controller. Application testing follows the separate playbook below.
 
-## Required connection data
+## Inputs and entry point
 
-Do not begin deployment until the controlling AI has all four minimum inputs: the target IP address,
-SSH username, SSH password, and Qwen API key. Do not infer any of them. Enter the SSH password only
-through SSH's interactive prompt; never place it in an argument, shell variable, file, log, result,
-or JSON.
-
-The controlling AI must set `CUA_MODEL_API_KEY` in the provisioning process environment before a
-Qwen-enabled deployment. The helper transfers it in a temporary `0600` file over encrypted SCP,
-deletes the remote temporary copy immediately after reading it, stores it only in the remote desktop
-user's `.env.local` with mode `0600`, and loads it only for the MCP server process. Never ask the
-user to paste it into a command, put it in JSON, or display it. This does not require SSHD `AcceptEnv`.
-The direct deployment start path explicitly exports the key to `treeland-autogui-mcp`; the project's
-`client_env.sh` also exports `.env.local` before it starts that process and refuses startup if the
-key is absent.
-
-## Entry point
-
-Run only `scripts/deploy.sh`. It first verifies `treeland-debug --json tree`; only a failed check
-triggers a matching Debug Treeland build, in-place install, and service restart. All lower-level
-helpers are internal.
-
-For a Treeland login or lock-screen test, append `--prelogin`. This starts MCP using the
-compositor's login-screen environment and does not alter DDM automatic-login settings.
-
-DesktopHarness is started through the target checkout's `client_env.sh`; do not invoke the MCP
-binary directly, because `client_env.sh` owns the ydotool, udev, and desktop-session setup.
-
-## Authentication screens
-
-Do not configure, enable, or change DDM automatic login. If a DDM login screen or lock screen is
-shown while preparing or testing the desktop, use the MCP/PyAutoGUI path to enter the
-user-supplied desktop password, unlock the desktop, and then continue the requested test.
-
-## Treeland simulated-manual testing
-
-When the user asks to test Treeland after deployment, the **controlling AI** must read the project
-checkout's `docs/treeland-mcp-test-playbook.md` in full before executing it through the deployed MCP
-endpoint. Resolve the remote project directory from `DESKTOPHARNESS_DIR`; when it is unset, use the
-desktop user's home directory discovered during inventory plus `/desktopharness`. Read that remote
-file with the read-only `scripts/remote_exec.sh` transport. This is not a second deployment
-mechanism: the target still starts only through `client_env.sh`, while the controlling AI uses the
-normal MCP tools as a simulated human operator. Do not replace the playbook with a local runner,
-SSH window commands, or direct `treeland-debug` control.
+Require six inputs from the controlling AI: target IP, SSH username, SSH password, Qwen API key,
+Treeland repository URL, and branch/tag/commit. Do not infer them or substitute upstream for a fork.
+Enter passwords through interactive prompts; never put them in arguments, files, logs, or JSON.
+Inject `CUA_MODEL_API_KEY` into the process environment without displaying it or putting it in JSON.
+The helper transfers the key over SCP and stores it in the remote user's `.env.local` with mode
+`0600`.
 
 ```sh
-CUA_MODEL_API_KEY=... scripts/deploy.sh --host <ip> --user <ssh-user> \
-  [--treeland-source <git-url>] [--treeland-ref <branch|tag|commit>]
+# CUA_MODEL_API_KEY is already injected into the process environment.
+scripts/deploy.sh --host <ip> --user <ssh-user> \
+  --treeland-source <git-url> --treeland-ref <branch|tag|commit> [--apt-upgrade] [--sudo-password]
 ```
 
-The facade calls, in order: Treeland preflight; conditional ref resolution and Debug build; then
-DesktopHarness provisioning. Do not invoke internal helpers directly.
+Use `scripts/deploy.sh` as the sole deployment entry point. It resolves and builds the exact
+selected commit in Debug mode, installs under `/usr`, restarts Treeland, and provisions
+DesktopHarness. A working existing `treeland-debug` must not bypass the requested build.
+The target starts MCP only through its checkout's `client_env.sh`.
 
-State the exact remote change plan and obtain confirmation immediately before running
-`scripts/provision_remote.sh`. Checking connectivity and system state is read-only; installation,
-updating, or starting a service is not.
+Read [references/treeland-build.md](references/treeland-build.md) before deployment for apt,
+sudo prerequisites, and build failure handling. Use `--sudo-password` to enter the supplied SSH
+password at the sudo prompt when both passwords match; it is sent only over encrypted SSH.
+The helper runs `apt-get update`; `--apt-upgrade`
+opts into `apt-get upgrade -y`. State the concrete change plan and obtain only authorization still
+missing from the user's request before running the entry point.
 
 ## Workflow
 
-1. Run `scripts/remote_exec.sh` for a bounded, read-only inventory. Collect the actual
-   graphical-session user, session type, and environment from `loginctl` and
-   `/proc/<session-leader>/environ`; do not invent `WAYLAND_DISPLAY`, `DISPLAY`,
-   `XDG_RUNTIME_DIR`, or `DBUS_SESSION_BUS_ADDRESS`.
-2. Check the current repository, `uv`, Python, dependencies, running process, configured backend,
-   endpoint, and MCP describe request. Reuse healthy components. Run compositor-specific checks
-   only when the selected backend requires them.
-3. After approval, run `scripts/provision_remote.sh`. It clones only when the selected project
-   directory is absent, updates only a clean existing checkout via fast-forward, and starts the
-   server as the discovered desktop-session user. It requires `CUA_MODEL_API_KEY` when the checked
-   configuration enables the embedded Qwen provider.
-4. Run `scripts/verify_mcp.py` against the endpoint. Observe and screenshot evidence are required.
-   An input probe is deliberately opt-in: it must use a user-approved, harmless `task_contract` and
-   `proposal` supplied in a JSON file; do not make up coordinates, keys, or a target application.
-5. After verification, fill `assets/deployment-report-template.md` from the observed facts into a
-   local file named `<machine>-<YYYYMMDDTHHMMSSZ>.md`, then run
-   `scripts/publish_report.sh` for that report. Publish `READY`, `FAILED`, `PARTIAL`, and `BLOCKED`
-   results alike when `REPORT_AUTO_PUBLISH=true`; do not publish if sanitization or report creation
-   fails.
-6. Return only the result schema in
-   [references/acceptance-contract.md](references/acceptance-contract.md). `READY` requires every
-   listed gate, not merely a PID or open port.
+1. Inventory through read-only `scripts/remote_exec.sh` using `SSH_HOST`, `SSH_USER`, and optional
+   `SSH_PORT` / `SSH_IDENTITY_FILE`. Discover the actual graphical user, session, and environment
+   through `loginctl` and `/proc/<session-leader>/environ`; do not invent display or bus variables.
+   Check sudo access, checkout state, dependencies, running MCP, and backend support. Reuse healthy
+   DesktopHarness components; stop at `DEPENDENCY` for an unsupported backend.
+2. Run the authorized deployment. DesktopHarness clones into an absent directory or fast-forwards
+   a clean checkout, and starts as the discovered desktop user. Add `--prelogin` for a Treeland
+   login/lock-screen test. Never change DDM automatic login; use MCP/PyAutoGUI with the supplied
+   desktop password when unlocking is needed.
+3. Read [references/acceptance-contract.md](references/acceptance-contract.md), then run
+   `scripts/verify_mcp.py` against the actual endpoint. Require observe and screenshot evidence.
+   `--input-probe` requires an explicitly approved harmless `task_contract` and `proposal` in a
+   supplied JSON file; do not invent probe coordinates, keys, or targets. A PID or open port alone
+   does not establish `READY`.
+4. Fill `assets/deployment-report-template.md` with observed facts; unknowns stay `未采集`.
+   Save as `<machine>-<YYYYMMDDTHHMMSSZ>.md`. Read
+   [references/report-publishing.md](references/report-publishing.md) and publish with
+   `scripts/publish_report.sh` when `REPORT_AUTO_PUBLISH=true`, including failed/partial/blocked
+   outcomes. Do not publish if report creation or sanitization fails. Keep `reporting.local.env`
+   ignored and out of commits. Return the acceptance contract's result schema.
+
+## Testing after deployment
+
+When asked to test Treeland, the controlling AI must read the remote checkout's
+`docs/treeland-mcp-test-playbook.md` in full through read-only `scripts/remote_exec.sh`.
+Locate it under `DESKTOPHARNESS_DIR`, defaulting to the discovered desktop user's home plus
+`/desktopharness`. Execute the playbook through deployed MCP tools as a simulated human operator;
+do not substitute a local runner, SSH window commands, or direct `treeland-debug` control.
 
 ## Boundaries
 
-- Retry SSH and HTTP requests at most twice after the initial attempt. Do not wait indefinitely.
-- Never reset the system, upgrade the OS, overwrite a dirty checkout, modify project source, delete
-  user data, or stop unrelated services.
-- An explicitly authorized Debug test build may replace Treeland under `/usr` and restart its
-  matching service.
-- Do not expose a network endpoint wider than the user approved. The project configuration currently
-  defaults to streamable HTTP at `/mcp`; report the endpoint actually configured.
-- A generic deployment skill cannot make an unsupported compositor work. If the installed
-  DesktopHarness backend does not support the detected compositor, stop at `DEPENDENCY` and report
-  the backend mismatch.
-- If desktop session discovery, required privilege, repository state, or a probe cannot be
-  established, stop at the corresponding failure phase rather than guessing or compensating with
-  broad system changes.
-
-## Helpers
-
-- `scripts/remote_exec.sh`: bounded SSH transport. Inputs come from `SSH_HOST`, `SSH_USER`,
-  optional `SSH_PORT`, and optional `SSH_IDENTITY_FILE`.
-- `scripts/provision_remote.sh`: idempotent remote inventory/install/start routine. It requires
-  `SSH_HOST` and `SSH_USER`; review its generated remote plan before execution.
-- `scripts/verify_mcp.py`: MCP protocol and evidence probe. Use `--input-probe` only with explicit
-  authorization and a supplied JSON probe definition.
-- `scripts/deploy.sh`: the only public deployment facade.
-
-## Report publishing
-
-After deployment verification, the controlling model writes and publishes one report to the
-separate, user-owned Git repository by default. Read
-[`references/report-publishing.md`](references/report-publishing.md) before configuring or using it.
-
-`reporting.local.env` lives beside this skill and is deliberately ignored by Git. It contains the
-repository destination and optional local identity/token settings; never add it to a commit. Use
-`assets/deployment-report-template.md` as the report structure. The controlling model fills it
-only from observed deployment and probe facts; unknown values remain `未采集`, never inferred.
-Use `scripts/publish_report.sh` with the completed, sanitized report. It creates a
-report-repository commit and pushes it automatically after testing; `--dry-run` is available for
-local checks.
+- Retry SSH/HTTP at most twice after the initial attempt.
+- Do not reset the system, perform release upgrades, overwrite dirty checkouts, modify project
+  source, delete user data, or stop unrelated services.
+- Keep network exposure within the user's authorization; report the actual endpoint.
+- Stop at the corresponding failure phase when session discovery, privilege, repository state,
+  dependencies, or a required probe cannot be established.

@@ -2,7 +2,8 @@
 
 Report one failed phase and its safe, concrete reason when a gate cannot be met:
 
-`SSH_CONNECT`, `SYSTEM_CHECK`, `DESKTOP_SESSION`, `DEPENDENCY`, `DESKTOPHARNESS_INSTALL`,
+`TREELAND_SOURCE`, `TREELAND_BUILD`, `TREELAND_INSTALL`, `SSH_CONNECT`, `SYSTEM_CHECK`,
+`DESKTOP_SESSION`, `DEPENDENCY`, `DESKTOPHARNESS_INSTALL`,
 `DESKTOPHARNESS_START`, `MCP_CONNECT`, or `DESKTOP_PROBE`.
 
 `READY` is permitted only when all of these are evidenced: `MACHINE_REACHABLE`,

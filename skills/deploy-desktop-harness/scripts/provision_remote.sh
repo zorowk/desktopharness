@@ -29,10 +29,15 @@ scp -p \
   -P "$port" \
   "${identity_args[@]}" \
   "$local_secret_file" "${SSH_USER}@${SSH_HOST}:${remote_secret_file}" \
-  || { printf 'PROVISION_FAILURE phase=SSH_CONNECT reason=qwen-api-key-transfer-failed\n' >&2; exit 1; }
+  || {
+    printf 'PROVISION_FAILURE phase=SSH_CONNECT reason=qwen-api-key-transfer-failed\n' >&2
+    exit 1
+  }
 
-"${SCRIPT_DIR}/remote_exec.sh" \
-  "PROJECT_URL=$(printf '%q' "$PROJECT_URL") PROJECT_DIR=$(printf '%q' "$PROJECT_DIR") REMOTE_SECRET_FILE=$(printf '%q' "$remote_secret_file") bash -se" \
+remote_command="PROJECT_URL=$(printf '%q' "$PROJECT_URL") "
+remote_command+="PROJECT_DIR=$(printf '%q' "$PROJECT_DIR") "
+remote_command+="REMOTE_SECRET_FILE=$(printf '%q' "$remote_secret_file") bash -se"
+"${SCRIPT_DIR}/remote_sudo_exec.sh" "$remote_command" \
   <<'REMOTE'
 set -euo pipefail
 
@@ -41,7 +46,8 @@ secret_file="${REMOTE_SECRET_FILE:-}"
 [[ "$secret_file" == /tmp/.desktopharness-qwen-* && -r "$secret_file" ]] \
   || fail DESKTOPHARNESS_START qwen-api-key-unavailable
 trap 'rm -f -- "$secret_file"' EXIT
-IFS= read -r CUA_MODEL_API_KEY < "$secret_file" || fail DESKTOPHARNESS_START qwen-api-key-unavailable
+IFS= read -r CUA_MODEL_API_KEY < "$secret_file" \
+  || fail DESKTOPHARNESS_START qwen-api-key-unavailable
 CUA_MODEL_API_KEY="${CUA_MODEL_API_KEY#CUA_MODEL_API_KEY=}"
 [[ -n "$CUA_MODEL_API_KEY" ]] || fail DESKTOPHARNESS_START qwen-api-key-unavailable
 rm -f -- "$secret_file"
@@ -100,7 +106,8 @@ fi
   || fail DESKTOP_SESSION session-environment-unreadable
 session_env="$(
   tr '\0' '\n' < "/proc/$environment_pid/environ" \
-    | grep -E '^(WAYLAND_DISPLAY|DISPLAY|XAUTHORITY|XDG_RUNTIME_DIR|DBUS_SESSION_BUS_ADDRESS|XDG_SESSION_TYPE)=' \
+    | grep -E "^(WAYLAND_DISPLAY|DISPLAY|XAUTHORITY|XDG_RUNTIME_DIR|\
+DBUS_SESSION_BUS_ADDRESS|XDG_SESSION_TYPE)=" \
     || true
 )"
 mapfile -t session_env_args <<<"$session_env"
@@ -141,7 +148,10 @@ config="$PROJECT_DIR/config/mcp-autoui.json"
 [[ -f "$config" ]] || fail DESKTOPHARNESS_START config-missing
 env_file="$PROJECT_DIR/.env.local"
 printf '%s\n' "$CUA_MODEL_API_KEY" | run_as_desktop sh -c \
-  'umask 077; IFS= read -r key; printf "CUA_MODEL_API_KEY=%s\\n" "$key" > "$1"; chmod 600 "$1"' _ "$env_file" \
+  'umask 077
+   IFS= read -r key
+   printf "CUA_MODEL_API_KEY=%s\\n" "$key" > "$1"
+   chmod 600 "$1"' _ "$env_file" \
   || fail DESKTOPHARNESS_START qwen-api-key-write-failed
 endpoint_port="$(
   sed -n 's/.*"port"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$config" \
@@ -156,8 +166,36 @@ if [[ "$backend" == treeland-* ]]; then
 fi
 
 if ! pgrep -u "$desktop_user" -f '[t]reeland-autogui-mcp.*--config' >/dev/null; then
+  # Source in a subshell so password-mode sudo remains available without exporting secrets.
+  # The preparation mode exits before uv or MCP is started as the SSH user.
+  (set -- --prepare-system; source "$PROJECT_DIR/client_env.sh") \
+    || fail DEPENDENCY client-system-preparation-failed
+  if ! pgrep -x ydotoold >/dev/null 2>&1; then
+    touch_flag=()
+    if command -v libinput >/dev/null 2>&1; then
+      devices="$(sudo libinput list-devices)" || fail DEPENDENCY libinput-device-query-failed
+      if grep -qi Touchscreen <<<"$devices"; then touch_flag=(-T); fi
+    fi
+    runtime_dir=""
+    for entry in "${session_env_args[@]}"; do
+      if [[ "$entry" == XDG_RUNTIME_DIR=* ]]; then runtime_dir="${entry#*=}"; fi
+    done
+    [[ -n "$runtime_dir" ]] || fail DESKTOP_SESSION XDG_RUNTIME_DIR-missing
+    sudo nohup ydotoold "${touch_flag[@]}" -p "$runtime_dir/.ydotool_socket" \
+      -o "$(id -u "$desktop_user"):$(id -g "$desktop_user")" </dev/null >/dev/null 2>&1 &
+    for ((attempt=0; attempt<50; attempt++)); do
+      [[ ! -S "$runtime_dir/.ydotool_socket" ]] || break
+      sleep 0.1
+    done
+    [[ -S "$runtime_dir/.ydotool_socket" ]] || fail DEPENDENCY ydotoold-start-failed
+  fi
   run_as_desktop env "${session_env_args[@]}" AUTOUI_MCP_CONFIG="$config" sh -c \
-    'IFS= read -r line < "$1" || exit 1; CUA_MODEL_API_KEY=${line#CUA_MODEL_API_KEY=}; [ "$CUA_MODEL_API_KEY" != "$line" ] || exit 1; export CUA_MODEL_API_KEY; cd "$2"; nohup ./client_env.sh >"$3" 2>&1 &' _ \
+    'IFS= read -r line < "$1" || exit 1
+     CUA_MODEL_API_KEY=${line#CUA_MODEL_API_KEY=}
+     [ "$CUA_MODEL_API_KEY" != "$line" ] || exit 1
+     export CUA_MODEL_API_KEY
+     cd "$2"
+     nohup ./client_env.sh >"$3" 2>&1 &' _ \
     "$env_file" "$PROJECT_DIR" \
     "$PROJECT_DIR/desktopharness-mcp.log"
 fi

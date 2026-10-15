@@ -11,8 +11,12 @@ if [ -f "${CLIENT_ENV_FILE}" ]; then
 fi
 
 MOUSE_SPEED_ACTION="unchanged"
+PREPARE_SYSTEM_ONLY=0
 for client_env_arg in "$@"; do
     case "${client_env_arg}" in
+        --prepare-system)
+            PREPARE_SYSTEM_ONLY=1
+            ;;
         --flat-speed)
             if [[ "${MOUSE_SPEED_ACTION}" != "unchanged" ]]; then
                 echo "Only one mouse speed action may be specified." >&2
@@ -29,7 +33,7 @@ for client_env_arg in "$@"; do
             ;;
         *)
             echo "Unknown argument: ${client_env_arg}" >&2
-            echo "Usage: $0 [--flat-speed | --restore-speed]" >&2
+            echo "Usage: $0 [--prepare-system] [--flat-speed | --restore-speed]" >&2
             exit 2
             ;;
     esac
@@ -42,7 +46,9 @@ if [ ! -f ~/.Xauthority ]; then
 fi
 
 #关闭签名限制
-#sudo dbus-send --print-reply --type=method_call --system --dest=com.deepin.daemon.ACL /org/deepin/security/hierarchical/Control org.deepin.security.hierarchical.Control.SetMode boolean:false
+#sudo dbus-send --print-reply --type=method_call --system \
+#    --dest=com.deepin.daemon.ACL /org/deepin/security/hierarchical/Control \
+#    org.deepin.security.hierarchical.Control.SetMode boolean:false
 
 # install missing base packages
 apt_packages=(
@@ -69,15 +75,16 @@ apt_packages=(
 )
 missing_apt_packages=()
 for package in "${apt_packages[@]}"; do
-    if ! dpkg-query -W -f='${Status}' "${package}" 2>/dev/null | grep -q '^install ok installed$'; then
+    if ! dpkg-query -W -f='${Status}' "${package}" 2>/dev/null \
+        | grep -q '^install ok installed$'; then
         missing_apt_packages+=("${package}")
     fi
 done
 
 if ((${#missing_apt_packages[@]} > 0)); then
     echo "Installing missing apt packages: ${missing_apt_packages[*]}"
-    sudo apt-get update
-    sudo apt-get install -y "${missing_apt_packages[@]}"
+    sudo apt-get update || exit 1
+    sudo apt-get install -y "${missing_apt_packages[@]}" || exit 1
 else
     echo "All required apt packages are already installed; skipping apt."
 fi
@@ -110,11 +117,11 @@ install_ydotool() {
   fi
 
   echo "Installing ydotool from source: ${REPO_4_URL}"
-  git clone --depth 1 "${REPO_4_URL}" "${REPO_4_DIR}"
+  git clone --depth 1 "${REPO_4_URL}" "${REPO_4_DIR}" || return 1
   (
-    cd "${REPO_4_DIR}"
+    cd "${REPO_4_DIR}" || exit 1
     cmake -Bbuild -GNinja \
-      -DCMAKE_INSTALL_PREFIX=/usr
+      -DCMAKE_INSTALL_PREFIX=/usr || exit 1
     sudo ninja -C build/ install
   )
 }
@@ -137,13 +144,17 @@ install_ydotool_udev_rule() {
   fi
 
   echo "Installing ydotoold mouse udev rule..." >&2
-  sudo install -m 0644 "${YDOTOOL_UDEV_RULE_SOURCE}" "${YDOTOOL_UDEV_RULE_TARGET}"
+  sudo install -m 0644 "${YDOTOOL_UDEV_RULE_SOURCE}" "${YDOTOOL_UDEV_RULE_TARGET}" || return 1
   sudo udevadm control --reload-rules
 }
 
 echo "[1/7] Optional ydotool install"
-install_ydotool
+install_ydotool || exit 1
 install_ydotool_udev_rule || exit 1
+
+if ((PREPARE_SYSTEM_ONLY)); then
+    exit 0
+fi
 
 echo "[2/7] Install uv"
 
@@ -211,7 +222,8 @@ configure_flat_mouse() {
         return 1
     fi
 
-    echo "Setting Treeland mouse acceleration to Flat with speed 0 (DConfig user: ${TREELAND_DCONFIG_USER})..." >&2
+    printf 'Setting Treeland mouse acceleration to Flat with speed 0 (DConfig user: %s)...\n' \
+        "${TREELAND_DCONFIG_USER}" >&2
     if ! run_treeland_dconfig set "${MOUSE_DCONFIG_ARGS[@]}" \
         -k mouseAccelerationProfile -v 1 >/dev/null \
         || ! run_treeland_dconfig set "${MOUSE_DCONFIG_ARGS[@]}" \
@@ -227,7 +239,9 @@ restore_default_mouse_speed() {
         return 1
     fi
 
-    echo "Restoring the default Treeland mouse acceleration configuration (DConfig user: ${TREELAND_DCONFIG_USER})..." >&2
+    printf '%s (DConfig user: %s)...\n' \
+        'Restoring the default Treeland mouse acceleration configuration' \
+        "${TREELAND_DCONFIG_USER}" >&2
     if ! run_treeland_dconfig reset "${MOUSE_DCONFIG_ARGS[@]}" \
         -k mouseAccelerationProfile >/dev/null \
         || ! run_treeland_dconfig reset "${MOUSE_DCONFIG_ARGS[@]}" \
@@ -238,7 +252,7 @@ restore_default_mouse_speed() {
 }
 
 touch_flag=()
-if command -v libinput >/dev/null 2>&1; then
+if ! pgrep -x ydotoold >/dev/null 2>&1 && command -v libinput >/dev/null 2>&1; then
     echo "Checking touchscreen via libinput..." >&2
     if sudo libinput list-devices 2>/dev/null | grep -qi "Touchscreen"; then
         echo "Touchscreen detected; enabling -T for ydotoold." >&2
@@ -261,7 +275,8 @@ esac
 
 if ! pgrep -x ydotoold >/dev/null 2>&1; then
     echo "Starting ydotoold (UID=${USER_UID}, GID=${USER_GID})..." >&2
-    sudo ydotoold "${touch_flag[@]}" -p "${XDG_RUNTIME_DIR}/.ydotool_socket" -o "${USER_UID}:${USER_GID}" >/dev/null 2>&1 &
+    sudo ydotoold "${touch_flag[@]}" -p "${XDG_RUNTIME_DIR}/.ydotool_socket" \
+        -o "${USER_UID}:${USER_GID}" >/dev/null 2>&1 &
 else
     echo "ydotoold already running; skipping start." >&2
 fi

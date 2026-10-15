@@ -12,6 +12,10 @@
 
 ## 环境
 
+- Treeland 仓库（不含凭据）/ 请求分支或 ref：`<URL / ref>`
+- Treeland 实际构建 commit：`<SHA>`
+- Treeland 构建目录：`<远程路径>`
+- apt update / upgrade：`<结果 / 未启用或结果>`
 - DesktopHarness：`<版本或 revision>`
 - 桌面 backend / 会话：`<backend / session type>`
 - MCP endpoint：`<endpoint，不含凭据>`
