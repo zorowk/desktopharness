@@ -12,10 +12,12 @@ while (($#)); do
     --treeland-ref) TREELAND_REF="$2"; shift 2 ;;
     --sudo-password) DESKTOPHARNESS_SUDO_PASSWORD=1; shift ;;
     --apt-upgrade) TREELAND_APT_UPGRADE=1; shift ;;
+    --source-deps) TREELAND_SOURCE_DEPS=1; shift ;;
     --prelogin) prelogin=1; shift ;;
     *)
       printf 'usage: %s --host HOST --user USER [--prelogin] ' "$0" >&2
       printf '%s\n' '--treeland-source URL --treeland-ref REF [--apt-upgrade] [--sudo-password]' >&2
+      printf '%s\n' '  [--source-deps]' >&2
       exit 2 ;;
   esac
 done
@@ -24,9 +26,11 @@ done
 : "${TREELAND_SOURCE_URL:?--treeland-source is required (the repository under test)}"
 : "${TREELAND_REF:?--treeland-ref is required (the branch, tag, or commit under test)}"
 : "${TREELAND_APT_UPGRADE:=0}"
+: "${TREELAND_SOURCE_DEPS:=0}"
 : "${CUA_MODEL_API_KEY:?CUA_MODEL_API_KEY must be injected by the controller}"
 export DESKTOPHARNESS_SUDO_PASSWORD
 export SSH_HOST SSH_USER TREELAND_SOURCE_URL TREELAND_REF TREELAND_APT_UPGRADE CUA_MODEL_API_KEY
+export TREELAND_SOURCE_DEPS
 
 "${root}/provision_treeland_debug.sh"
 if ((prelogin)); then

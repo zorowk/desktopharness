@@ -23,19 +23,24 @@ The helper transfers the key over SCP and stores it in the remote user's `.env.l
 ```sh
 # CUA_MODEL_API_KEY is already injected into the process environment.
 scripts/deploy.sh --host <ip> --user <ssh-user> \
-  --treeland-source <git-url> --treeland-ref <branch|tag|commit> [--apt-upgrade] [--sudo-password]
+  --treeland-source <git-url> --treeland-ref <branch|tag|commit> \
+  [--apt-upgrade] [--source-deps] [--sudo-password]
 ```
 
 Use `scripts/deploy.sh` as the sole deployment entry point. It resolves and builds the exact
-selected commit in Debug mode, installs under `/usr`, restarts Treeland, and provisions
-DesktopHarness. A working existing `treeland-debug` must not bypass the requested build.
+selected commit in Debug mode, uses the installation prefix `/usr`, restarts DDM and Treeland,
+and provisions DesktopHarness. A working existing `treeland-debug` must not bypass the requested
+build.
 The target starts MCP only through its checkout's `client_env.sh`.
 
 Read [references/treeland-build.md](references/treeland-build.md) before deployment for apt,
 sudo prerequisites, and build failure handling. Use `--sudo-password` to enter the supplied SSH
 password at the sudo prompt when both passwords match; it is sent only over encrypted SSH.
 The helper runs `apt-get update`; `--apt-upgrade`
-opts into `apt-get upgrade -y`. State the concrete change plan and obtain only authorization still
+opts into `apt-get upgrade -y`. If apt cannot satisfy DDM/protocol versions, use the authorized
+`--source-deps` fallback described in that reference. It builds protocols before DDM and uses
+`-DCMAKE_INSTALL_PREFIX=/usr` for both. Prefer a reboot after replacing the whole stack and
+verify again after reconnecting. State the concrete change plan and obtain only authorization still
 missing from the user's request before running the entry point.
 
 ## Workflow

@@ -15,6 +15,8 @@
 - Treeland 仓库（不含凭据）/ 请求分支或 ref：`<URL / ref>`
 - Treeland 实际构建 commit：`<SHA>`
 - Treeland 构建目录：`<远程路径>`
+- DDM / treeland-protocols 来源、ref、commit 和构建目录：`<apt 或源码记录>`
+- 安装前缀 / 重启方式及恢复后验证：`</usr / 服务重启或整机重启 / 结果>`
 - apt update / upgrade：`<结果 / 未启用或结果>`
 - DesktopHarness：`<版本或 revision>`
 - 桌面 backend / 会话：`<backend / session type>`
